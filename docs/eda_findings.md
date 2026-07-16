@@ -330,3 +330,260 @@ the same defect and is listed so nobody rediscovers it later as a mysterious out
 Any downstream code that converts these fields to dates or treats them as numbers has to
 handle the zeros first, because a model given `DOB = 0` will read it as a birth date in
 1900, not as a missing value.
+
+---
+
+## 4. Distributions of key features
+
+**Frame: training split (76,329 rows)** throughout. These are structural facts the
+peeking rule would permit on the full dataset, but they are computed on training anyway
+so that every distribution described here matches the rows the models will actually see.
+
+### Demographics
+
+**`AGE`, observed values only (n=57,414; 18,915 missing).**
+
+| Statistic | Value |
+| --- | ---: |
+| Minimum | 1 |
+| 25th percentile | 48 |
+| Median | 62 |
+| 75th percentile | 75 |
+| Maximum | 98 |
+| Mean | 61.6 |
+
+Figure: `age_distribution.png`. The constituent base is old. Half are over 62, a quarter
+are over 75, and the modal two-year bin is 76-78 with 2,556 people. For the Foundation
+scenario this is the sharpest limitation of the proxy: a 1998 veterans-charity mailing
+list skews decades older than the families of children with a rare congenital disorder,
+so the age-response relationship found here should not be read as transferable. The
+model's method transfers; this particular coefficient does not.
+
+40 rows (0.070% of observed) have an `AGE` under 20, of which 15 are 5 or under and 9
+are exactly 1. A direct-mail donor file with 9 one-year-old donors has bad data, not
+infant philanthropists. The count is too small to matter for a model and too obviously
+wrong to leave unmentioned; it is carried into task 6 and excluded from the age bands in
+task 5.
+
+**`GENDER` and `INCOME`.** Figure: `gender_income_counts.png`.
+
+| `GENDER` | Count | % |
+| --- | ---: | ---: |
+| F | 41,014 | 53.73 |
+| M | 31,282 | 40.98 |
+| (blank) | 2,360 | 3.09 |
+| U | 1,381 | 1.81 |
+| J | 290 | 0.38 |
+| C | 1 | 0.00 |
+| A | 1 | 0.00 |
+
+`F` and `M` cover 94.71%. The rest is a blank (unknown), `U` (explicitly "unknown", so
+the column has two different ways to say the same thing), `J` (joint account, a household
+rather than a person), and two codes appearing once each. `C` and `A` at one row apiece
+are the signature of data entry error. Any encoding of this column has to decide what to
+do with a category of size 1, and a naive one-hot encoding would hand the model a feature
+that fires for exactly one training row.
+
+`INCOME` is a 7-level ordinal bracket, not a dollar amount. The largest category is
+missing (17,027, 22.31%), bigger than any real bracket; the largest observed bracket is 5
+(12,272, 16.08%). The distribution across the observed brackets is fairly flat, ranging
+from 5,986 (bracket 7) to 12,272 (bracket 5).
+
+### Giving history
+
+| Column | Min | Median | Mean | Max | Skew | Zeros |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `LASTGIFT` | 0.00 | 15.00 | 17.32 | 1,000.00 | 17.3 | 304 |
+| `AVGGIFT` | 1.29 | 11.67 | 13.33 | 1,000.00 | 27.5 | 0 |
+| `NGIFTALL` | 1.00 | 7.00 | 9.60 | 237.00 | 2.1 | 0 |
+| `RAMNTALL` | 13.00 | 78.00 | 104.41 | 9,485.00 | 13.8 | 0 |
+
+Figure: `giving_history_distributions.png`, small multiples with the raw scale on top and
+the log scale below.
+
+The plan predicted strong right skew and log-scale views would be needed. Both hold, and
+the raw row of the figure shows why: at raw scale every panel collapses into a single bar
+at the left with a flat line running to the maximum, which is a true picture that
+communicates nothing. On the log scale the bulk separates into a roughly lognormal hump
+for the three dollar-valued columns. `NGIFTALL` is the exception and stays spiky on both
+scales, because it is a discrete count with 87 distinct values and real mass on the small
+integers (7,918 constituents have given exactly once, 6,203 exactly twice).
+
+**Outliers: real donors, not errors.** The largest values are `MAXRAMNT` $5,000 then
+$1,000 and $1,000; `LASTGIFT` $1,000, $1,000, $563; `RAMNTALL` $9,485, $5,675, $3,985.
+These are plausible: a $9,485 lifetime total across a giving history spanning to 1975 is
+an ordinary major donor, not a decimal point in the wrong place. Nothing is removed, per
+the plan, and nothing should be: the recommendation in task 6 is to transform rather than
+trim.
+
+Two genuine oddities, both small. `LASTGIFT` has 304 zeros, a "most recent gift" of
+nothing, and one row of exactly $0.01, which is what stretches the `LASTGIFT` log panel
+across two empty decades. `MINRAMNT` has 459 zeros. These look like placeholder values
+rather than gifts, and they are listed in task 6.
+
+### Census exemplars
+
+Three of the 290 census columns, chosen to span the group's three scales rather than for
+interest. Figure: `census_exemplars.png`.
+
+| Column | Min | Median | Max | Rows = 0 | What it is |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `POP901` | 0 | 1,562 | 98,701 | 623 | Neighborhood population (count) |
+| `MALEVET` | 0 | 31 | 99 | 2,617 | Male veterans in neighborhood (%) |
+| `HV1` | 0 | 737 | 6,000 | 875 | Median home value (dollars, hundreds) |
+
+The group is not homogeneous despite loading as 290 near-identical numeric columns. It
+mixes unbounded counts (`POP901` to 98,701), percentages capped at 99, and dollar amounts
+in hundreds. Any scaling decision has to be made per sub-kind, not for "the census block"
+as one thing.
+
+Every exemplar has a zero spike, and the zeros are suspicious in the same way as `DOB = 0`.
+A neighborhood with a population of 0 and a median home value of $0 does not exist; these
+are almost certainly unmatched zip codes recorded as zero rather than as missing. That
+matters more here than elsewhere because it is 290 columns' worth of the same problem,
+and NaN-based missingness reporting cannot see any of it. `MALEVET = 0` is the ambiguous
+case: a neighborhood genuinely can have no male veterans, so zero is not automatically
+missing there. Task 6 records this.
+
+---
+
+## 5. Relationships with response
+
+**Frame: training split (76,329 rows).** Overall training response rate: 5.075%. All
+figures in this section carry 95% Wilson intervals, and every bar is labeled with its
+segment size.
+
+### Response by RFA_2F (gift frequency)
+
+Figure: `response_rate_by_rfa2f.png`.
+
+| `RFA_2F` | n | Responders | Rate | 95% CI |
+| --- | ---: | ---: | ---: | --- |
+| 1 (fewest gifts) | 38,151 | 1,445 | 3.788% | [3.60%, 3.98%] |
+| 2 | 16,497 | 845 | 5.122% | [4.80%, 5.47%] |
+| 3 | 12,165 | 788 | 6.478% | [6.05%, 6.93%] |
+| 4 (most gifts) | 9,516 | 796 | 8.365% | [7.83%, 8.94%] |
+
+Monotonic and clean: every step up in frequency raises the response rate, the top band
+responds **2.21x** as often as the bottom, and no two confidence intervals overlap. This
+is the strongest single signal in the EDA.
+
+### Response by RFA_2A (gift amount)
+
+Figure: `response_rate_by_rfa2a.png`.
+
+| `RFA_2A` | n | Responders | Rate | 95% CI |
+| --- | ---: | ---: | ---: | --- |
+| D (smallest gifts) | 5,952 | 560 | 9.409% | [8.69%, 10.18%] |
+| E | 17,255 | 1,120 | 6.491% | [6.13%, 6.87%] |
+| F | 37,643 | 1,664 | 4.420% | [4.22%, 4.63%] |
+| G (largest gifts) | 15,479 | 530 | 3.424% | [3.15%, 3.72%] |
+
+Monotonic in the **opposite** direction, and stronger: the smallest-gift band responds
+**2.75x** as often as the largest, intervals again non-overlapping. Constituents who have
+historically given small amounts are substantially more likely to give again.
+
+This is the most useful finding in the EDA and the most easily misread. It does not mean
+small donors are worth more; it means they respond more often. The two targets pull
+against each other: `RFA_2A = D` maximizes the chance of a response, and the same band by
+construction gives the least when it does respond. Any outreach policy built on `TARGET_B`
+alone will systematically prefer the constituents who give least. This is precisely why
+the campaign has two targets, and why an expected-value framing (`TARGET_B` probability
+times `TARGET_D` amount) is the honest way to combine them. That is a modeling decision
+and out of scope for this pass, but the EDA is where the tension becomes visible, so it
+is recorded here.
+
+### Response by AGE band and INCOME
+
+Figures: `response_rate_by_age_band.png`, `response_rate_by_income.png`.
+
+| AGE band | n | Rate | 95% CI |
+| --- | ---: | ---: | --- |
+| 20-29 | 917 | 4.580% | [3.41%, 6.13%] |
+| 30-39 | 4,957 | 4.075% | [3.56%, 4.66%] |
+| 40-49 | 9,589 | 4.828% | [4.42%, 5.28%] |
+| 50-59 | 10,539 | 5.190% | [4.78%, 5.63%] |
+| 60-69 | 9,996 | 5.512% | [5.08%, 5.98%] |
+| 70-79 | 11,988 | 5.831% | [5.43%, 6.26%] |
+| 80-99 | 9,388 | 4.708% | [4.30%, 5.16%] |
+
+Response climbs from the 30s through the 70s, peaks at 5.831% in the 70-79 band, then
+falls back in the 80s. Spread is 1.43x, well short of the RFA signals. The bands are
+decade bins as the plan specified, with two exclusions: 18,915 rows where `AGE` is missing
+and the 40 rows with an `AGE` under 20. The under-20 rows would have shown a 12.5%
+response rate from 5 responders out of 40, which would have been the tallest bar on the
+chart and pure noise resting on data that is wrong anyway.
+
+| `INCOME` | n | Rate | 95% CI |
+| --- | ---: | ---: | --- |
+| 1 (lowest) | 7,212 | 4.146% | [3.71%, 4.63%] |
+| 2 | 10,486 | 4.873% | [4.48%, 5.30%] |
+| 3 | 6,877 | 5.046% | [4.55%, 5.59%] |
+| 4 | 10,192 | 4.974% | [4.57%, 5.41%] |
+| 5 | 12,272 | 5.166% | [4.79%, 5.57%] |
+| 6 | 6,277 | 5.401% | [4.87%, 5.99%] |
+| 7 (highest) | 5,986 | 5.797% | [5.23%, 6.42%] |
+
+A gentle rise, 1.40x from bracket 1 to bracket 7, and not strictly monotonic (bracket 4
+sits below bracket 3). Every band is within 0.93 percentage points of the overall rate,
+and most of the confidence intervals overlap. `INCOME` is a weak signal on its own.
+
+Both of these are demographic segments, and both need the fairness treatment the proposal
+commits to. The direction matters ethically: response rises with income, so a model
+trained to maximize response will preferentially target wealthier constituents. For
+outreach efficiency that is defensible. If a score built this way were ever allowed to
+influence who gets *services*, it would systematically disadvantage the poorest families,
+which is the exact failure the project's ethics constraints exist to prevent. The
+constraint is not decorative, and this table is the reason.
+
+### Correlations with response
+
+Figure: `correlation_giving_history.png`. Pearson correlations among the numeric
+giving-history features plus `TARGET_B`. Because `TARGET_B` is binary, its row is a
+point-biserial correlation, computed as Pearson.
+
+| Feature | r with `TARGET_B` |
+| --- | ---: |
+| `CARDGIFT` | +0.0528 |
+| `NGIFTALL` | +0.0498 |
+| `RAMNTALL` | +0.0137 |
+| `TIMELAG` | -0.0115 |
+| `MAXRAMNT` | -0.0173 |
+| `MINRAMNT` | -0.0323 |
+| `AVGGIFT` | -0.0345 |
+| `LASTGIFT` | -0.0371 |
+
+Every one is under 0.06 in absolute value. The strongest is `CARDGIFT` at +0.0528. Read
+literally, no giving-history feature has a meaningful linear association with response.
+
+That reading would be a mistake, and the figure is included partly to make the mistake
+visible. `RFA_2F` sorts response from 3.8% to 8.4% and `RFA_2A` from 9.4% to 3.4%, both
+monotonically, and those two columns are built from the same giving history these
+correlations are computed on. A correlation near zero against a target that is 95% zeros
+does not mean no relationship; it means the relationship is not linear in the raw
+feature. This is the concrete argument for the plan's model lineup: logistic regression
+on raw features is a baseline that should be expected to struggle, and the tree-based
+models are there because the signal is in the bands, not the slopes.
+
+The off-diagonal is the more actionable part. `NGIFTALL` and `CARDGIFT` correlate at
+**0.91**, and `AVGGIFT` correlates at 0.79 with `LASTGIFT`, 0.76 with `MINRAMNT`, and 0.75
+with `MAXRAMNT`. The giving-history block carries far fewer independent facts than its
+column count suggests, which matters for the logistic regression baseline's coefficient
+stability. Task 6 records it.
+
+### Strongest candidate signals, in plain language
+
+1. **`RFA_2A`, past gift amount band.** 9.409% response for the smallest-gift band
+   against 3.424% for the largest, 2.75x, monotonic across four bands, non-overlapping
+   intervals. Smaller past gifts predict more frequent response.
+2. **`RFA_2F`, past gift frequency.** 3.788% to 8.365%, 2.21x, monotonic,
+   non-overlapping intervals. More past gifts predict response.
+3. **`AGE`**, 1.43x across decade bands, peaking at 70-79 (5.831%).
+4. **`INCOME`**, 1.40x, rising with bracket but not strictly monotonic and with wide
+   interval overlap.
+
+The two RFA components are the signals worth building on, and both are derived from
+giving behavior rather than from who the constituent is. That is a good property for this
+project: the strongest predictors are things constituents *did*, not demographics they
+were born into. Neither raw giving-history correlations nor the 290-column census block
+produced anything comparable at this stage.
