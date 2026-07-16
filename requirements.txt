@@ -1,0 +1,16 @@
+# Pinned to the versions actually used to run the test suite on 2026-07-16
+# (macOS, Apple Silicon, Python 3.14.3).
+#
+# No TensorFlow. See CLAUDE.md: tensorflow-cpu has no Apple Silicon wheels. If a Keras
+# model is ever needed, it gets trained elsewhere and only the artifact lands here.
+
+# Data loading and manipulation.
+pandas==3.0.3
+numpy==2.5.1
+
+# Modeling and the train/test split convention.
+scikit-learn==1.9.0
+scipy==1.18.0
+
+# Tests.
+pytest==9.1.1
