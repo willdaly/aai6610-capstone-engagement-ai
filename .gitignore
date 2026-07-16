@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Project-specific ---
+
+# Dataset. Created by model/download_data.sh, never committed.
+# KDD Cup 1998 learning set is ~117 MB uncompressed.
+data/
+
+# macOS
+.DS_Store
