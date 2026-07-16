@@ -29,8 +29,15 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
+from scipy.stats import chi2_contingency  # noqa: E402
 
-from load_data import REPO_ROOT, TARGET_BINARY, load_raw, make_split  # noqa: E402
+from load_data import (  # noqa: E402
+    REPO_ROOT,
+    TARGET_AMOUNT,
+    TARGET_BINARY,
+    load_raw,
+    make_split,
+)
 
 FIGURES_DIR = REPO_ROOT / "docs" / "figures"
 EDA_DIR = REPO_ROOT / "docs" / "eda"
@@ -113,19 +120,30 @@ def style_axes(ax: plt.Axes, title: str, xlabel: str, ylabel: str, frame: str) -
             peeking rule requires this on the figure itself, not just in the findings
             doc, so a figure pasted into the report carries its own provenance.
     """
-    ax.set_title(title, pad=14)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
     # Frame goes just under the title, small and gray: present for provenance, not
-    # competing with the data for attention.
-    ax.text(
-        0.0,
-        1.02,
+    # competing with the data for attention. Positioned in offset points rather than
+    # axes fractions so it sits the same distance above the axes whatever the figure
+    # height, and the title is padded past it by line count so a two-line title does
+    # not land on top of it.
+    frame_offset_points = 4
+    ax.annotate(
         f"Frame: {frame}",
-        transform=ax.transAxes,
+        xy=(0.0, 1.0),
+        xycoords="axes fraction",
+        xytext=(0, frame_offset_points),
+        textcoords="offset points",
+        va="bottom",
         fontsize=8,
         color=REFERENCE,
     )
+    title_line_height_points = 14
+    ax.set_title(
+        title,
+        pad=frame_offset_points
+        + title_line_height_points * (1 + title.count("\n")),
+    )
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
 
 
 def save_figure(fig: plt.Figure, name: str) -> Path:
@@ -466,6 +484,284 @@ def report_task1(inventory: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 2: targets (training split)
+# ---------------------------------------------------------------------------
+
+
+def task2_targets(train: pd.DataFrame, df: pd.DataFrame) -> None:
+    """Describe both targets and write the TARGET_D histogram. Frame: training split.
+
+    Args:
+        train: Training split from make_split(df) with defaults.
+        df: The full frame, used only to confirm the stratified split preserved the
+            positive rate. That is a check on the split, not an analysis of the target,
+            so reading the full rate here does not leak anything about the test set.
+    """
+    print("=" * 78)
+    print(f"TASK 2  Targets. Frame: training split (n={len(train):,}).")
+    print("=" * 78)
+
+    positives = int(train[TARGET_BINARY].sum())
+    train_rate = float(train[TARGET_BINARY].mean())
+    full_rate = float(df[TARGET_BINARY].mean())
+
+    print(f"\nTARGET_B, training split: {positives:,} positive of {len(train):,}")
+    print(f"  training rate:     {train_rate * 100:.4f}%")
+    print(f"  full dataset rate: {full_rate * 100:.4f}%  (stratification check)")
+    print(f"  difference:        {abs(train_rate - full_rate) * 100:.4f} pp")
+    print(f"  negatives per positive: {(1 - train_rate) / train_rate:.1f}")
+
+    responders = train.loc[train[TARGET_BINARY] == 1, TARGET_AMOUNT]
+    print(f"\nTARGET_D among responders only (n={len(responders):,}):")
+    summary = responders.describe()
+    for label in ("min", "25%", "50%", "75%", "max"):
+        print(f"  {label:<5} ${summary[label]:>7.2f}")
+    print(f"  mean  ${summary['mean']:>7.2f}")
+    print(f"  std   ${summary['std']:>7.2f}")
+
+    # Non-responders are documented as 0.0 rather than NaN. Confirm rather than assume:
+    # a NaN here would silently drop rows from any later amount model.
+    non_responders = train.loc[train[TARGET_BINARY] == 0, TARGET_AMOUNT]
+    print(f"\n  Non-responders with a non-zero TARGET_D: {int((non_responders != 0).sum())}")
+    print(f"  Non-responders with a NaN TARGET_D:      {int(non_responders.isna().sum())}")
+
+    print("\n  Ten most common amounts (donations cluster on round numbers):")
+    counts = responders.value_counts().head(10)
+    for amount, count in counts.items():
+        print(
+            f"    ${amount:>6.2f}  {count:>4}  ({count / len(responders) * 100:>4.1f}% of responders)"
+        )
+
+    round_amounts = [5.0, 10.0, 15.0, 20.0, 25.0]
+    n_round = int(responders.isin(round_amounts).sum())
+    print(
+        f"\n  Gave exactly $5/$10/$15/$20/$25: {n_round:,} of {len(responders):,} "
+        f"({n_round / len(responders) * 100:.1f}%)"
+    )
+    n_multiple_of_5 = int((responders % 5 == 0).sum())
+    print(
+        f"  Gave an exact multiple of $5:    {n_multiple_of_5:,} of {len(responders):,} "
+        f"({n_multiple_of_5 / len(responders) * 100:.1f}%)"
+    )
+
+    _figure_target_d(responders)
+    print()
+
+
+def _figure_target_d(responders: pd.Series) -> None:
+    """Histogram of TARGET_D for responders. Frame: training split."""
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    # $1 bins from 0 to the observed max. Fine enough that the spikes on round amounts
+    # stay visible as spikes; coarser bins would smear them into the shape and hide the
+    # very thing this figure is meant to show.
+    top = float(responders.max())
+    ax.hist(responders, bins=range(0, int(top) + 2), color=BASE)
+
+    median = float(responders.median())
+    ax.axvline(median, color=ACCENT, linewidth=2)
+    ax.text(
+        median + 2,
+        ax.get_ylim()[1] * 0.92,
+        f"median ${median:.0f}",
+        color=ACCENT,
+        fontsize=9,
+        fontweight="bold",
+    )
+
+    style_axes(
+        ax,
+        title="Responder donations cluster on round amounts, and $10 is the mode",
+        xlabel="TARGET_D, donation amount (US dollars)",
+        ylabel="Responders",
+        frame=f"training split, responders only (n={len(responders):,})",
+    )
+    # Axis runs to the true maximum ($200) rather than cropping the tail. The tail is
+    # thin enough to be invisible at this scale, which is itself the honest picture.
+    ax.set_xlim(0, top)
+    save_figure(fig, "target_d_distribution_responders.png")
+
+
+# ---------------------------------------------------------------------------
+# Task 3: missing data
+# ---------------------------------------------------------------------------
+
+
+def task3_missing(df: pd.DataFrame, train: pd.DataFrame, inventory: pd.DataFrame) -> None:
+    """Missingness: extent on the full dataset, target relationships on training.
+
+    The two frames are kept apart deliberately. How much is missing is a structural
+    fact and uses all 95,412 rows. Whether missingness predicts response is a statement
+    about the target and uses the training split only.
+    """
+    print("=" * 78)
+    print("TASK 3  Missing data. Frames: full dataset for extent, training for target.")
+    print("=" * 78)
+
+    top20 = inventory.nlargest(20, "pct_missing")
+    _figure_missingness_top20(top20)
+
+    print(f"\nColumns with any NaN:   {int((inventory['pct_missing'] > 0).sum())} of 481")
+    print(f"Columns with any blank: {int((inventory['pct_blank'] > 0).sum())} of 481")
+    print(
+        f"Columns with neither:   "
+        f"{int(((inventory['pct_missing'] == 0) & (inventory['pct_blank'] == 0)).sum())} of 481"
+    )
+
+    print("\nAGE and INCOME, observed values. Frame: full dataset.")
+    for column in ("AGE", "INCOME"):
+        series = df[column]
+        print(
+            f"  {column:<7} {series.isna().sum():>6,} missing "
+            f"({series.isna().mean() * 100:5.2f}%)  "
+            f"observed range {series.min():g} to {series.max():g}, "
+            f"{series.nunique()} distinct"
+        )
+    print(f"  AGE values equal to 0: {int((df['AGE'] == 0).sum())} (no zero-coded ages)")
+
+    print("\nResponse rate by missingness. Frame: training split.")
+    overall = float(train[TARGET_BINARY].mean())
+    print(f"  Overall training response rate: {overall * 100:.3f}%")
+
+    rates = {}
+    for column in ("AGE", "INCOME"):
+        is_missing = train[column].isna()
+        rate_missing = float(train.loc[is_missing, TARGET_BINARY].mean())
+        rate_present = float(train.loc[~is_missing, TARGET_BINARY].mean())
+        rates[column] = (rate_missing, rate_present, int(is_missing.sum()))
+
+        # The plan makes the indicator-flag recommendation conditional on whether
+        # missingness actually predicts response, so eyeballing a gap of a fifth of a
+        # percentage point is not enough. Test it.
+        contingency = pd.crosstab(is_missing, train[TARGET_BINARY])
+        chi2, p_value, _dof, _expected = chi2_contingency(contingency)
+
+        print(f"\n  {column}:")
+        print(
+            f"    missing (n={is_missing.sum():>6,}): {rate_missing * 100:.3f}% respond"
+        )
+        print(
+            f"    present (n={(~is_missing).sum():>6,}): {rate_present * 100:.3f}% respond"
+        )
+        print(
+            f"    difference: {(rate_missing - rate_present) * 100:+.3f} pp "
+            f"(ratio {rate_missing / rate_present:.2f}x)"
+        )
+        print(
+            f"    chi-square test of independence: chi2={chi2:.3f}, p={p_value:.4f} "
+            f"-> {'predicts' if p_value < 0.05 else 'does not predict'} response at a=0.05"
+        )
+
+    _figure_missingness_response(rates, overall)
+
+    # AGE is derived from DOB, and the derivation is where the missingness comes from.
+    # Worth stating precisely because it means AGE and DOB carry one fact, not two.
+    dob_zero_age_missing = int(((df["DOB"] == 0) & (df["AGE"].isna())).sum())
+    age_missing_dob_present = int(((df["AGE"].isna()) & (df["DOB"] > 0)).sum())
+    print(
+        f"\n  AGE missingness tracks DOB=0 almost exactly. Frame: full dataset.\n"
+        f"    DOB=0 and AGE missing:      {dob_zero_age_missing:,}\n"
+        f"    AGE missing but DOB present: {age_missing_dob_present}\n"
+        f"    DOB=0 but AGE present:       {int(((df['DOB'] == 0) & (df['AGE'].notna())).sum())}"
+    )
+
+    print("\nDisguised missingness in categorical codes. Frame: full dataset.")
+    blanks = inventory[inventory["pct_blank"] > 0].nlargest(12, "pct_blank")
+    print("  Worst 12 string columns by blank share:")
+    for row in blanks.itertuples():
+        print(f"    {row.column:<10} {row.pct_blank:>6.2f}%  group={row.group}")
+
+    # Numeric columns can disguise missingness too, by coding it as a sentinel value.
+    # The date fields are the ones at risk: a YYMM date of 0 is not a date.
+    print("\n  Numeric columns coding missingness as 0 rather than NaN:")
+    for column in ("DOB", "FISTDATE"):
+        zeros = int((df[column] == 0).sum())
+        print(
+            f"    {column:<10} {zeros:>6,} rows are 0 ({zeros / len(df) * 100:.2f}%), "
+            f"in a YYMM field otherwise ranging "
+            f"{int(df.loc[df[column] > 0, column].min())} to {int(df[column].max())}"
+        )
+    print()
+
+
+def _figure_missingness_top20(top20: pd.DataFrame) -> None:
+    """Horizontal bar of the 20 most-missing columns. Frame: full dataset."""
+    fig, ax = plt.subplots(figsize=(9, 7))
+
+    ordered = top20.sort_values("pct_missing")
+    positions = range(len(ordered))
+    ax.barh(list(positions), ordered["pct_missing"], color=BASE)
+
+    ax.set_yticks(list(positions))
+    ax.set_yticklabels(ordered["column"])
+    for y, value in zip(positions, ordered["pct_missing"]):
+        ax.text(value + 0.6, y, f"{value:.2f}%", va="center", fontsize=8, color=REFERENCE)
+
+    style_axes(
+        ax,
+        title="The most-missing columns are all per-mailing response records,\nwhere missing means 'did not give', not 'unknown'",
+        xlabel="Rows missing (%)",
+        ylabel="",
+        frame="full dataset (n=95,412)",
+    )
+    ax.set_xlim(0, 108)
+    ax.grid(axis="y", visible=False)
+    save_figure(fig, "missingness_top20.png")
+
+
+def _figure_missingness_response(
+    rates: dict[str, tuple[float, float, int]], overall: float
+) -> None:
+    """Response rate for missing vs present AGE/INCOME. Frame: training split."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    labels = []
+    values = []
+    colors = []
+    for column, (rate_missing, rate_present, _n) in rates.items():
+        labels.extend([f"{column}\nmissing", f"{column}\npresent"])
+        values.extend([rate_missing * 100, rate_present * 100])
+        # Accent the missing bars: they are the comparison the figure exists to make.
+        colors.extend([ACCENT, BASE])
+
+    bars = ax.bar(labels, values, color=colors, width=0.62)
+    for bar, value in zip(bars, values):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            value + 0.06,
+            f"{value:.2f}%",
+            ha="center",
+            fontsize=9,
+        )
+
+    ax.axhline(overall * 100, color=REFERENCE, linestyle="--", linewidth=1.2)
+    # Below the line, not above: above collides with the bar value labels, which all
+    # sit within a quarter of a point of the reference.
+    ax.text(
+        len(labels) - 0.45,
+        overall * 100 - 0.42,
+        f"overall {overall * 100:.2f}%",
+        ha="right",
+        fontsize=8,
+        color=REFERENCE,
+    )
+
+    style_axes(
+        ax,
+        title="Missingness in AGE or INCOME does not predict response:\nthe two gaps are small, point in opposite directions, and are not significant",
+        xlabel="",
+        ylabel="Response rate (% giving to the campaign)",
+        frame="training split (n=76,329)",
+    )
+    # Y axis starts at zero and runs well past the bars. Zooming in on the 4.8-5.3%
+    # range would turn a null result into an apparent effect, which is the specific
+    # dishonesty this figure has to avoid: the bars genuinely are near-identical.
+    ax.set_ylim(0, max(values) * 1.6)
+    ax.grid(axis="x", visible=False)
+    save_figure(fig, "response_rate_by_missingness_age_income.png")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -484,6 +780,8 @@ def main() -> None:
 
     inventory = task1_inventory(df)
     report_task1(inventory)
+    task2_targets(train, df)
+    task3_missing(df, train, inventory)
 
 
 if __name__ == "__main__":

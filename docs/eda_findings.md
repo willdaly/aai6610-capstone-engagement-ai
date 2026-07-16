@@ -114,7 +114,7 @@ where the dataset actually has gaps: `AGE` (24.80%) and `INCOME` (22.31%) do not
 in it, and neither does any column whose missingness is genuine ignorance rather than a
 non-event. Task 3 takes that up.
 
-### Disguised missingness
+### Blank strings, which the NaN count misses entirely
 
 65 of the 74 string columns contain blank or whitespace-only values, and none of them
 appear in the NaN-based top 20 above, because `read_csv` reads a space as data. The
@@ -123,3 +123,210 @@ worst are `RECPGVG` (99.88% blank), `SOLP3` (99.81%), `MAJOR` (99.69%), `PLATES`
 `NOEXCH` is in fact the mildest case in the dataset, with 7 blank rows out of 95,412.
 The inventory therefore reports `pct_blank` alongside `pct_missing`, and any statement
 about missingness in the report has to account for both. Task 3 covers the substance.
+
+---
+
+## 2. Targets
+
+**Frame: training split (76,329 rows).** Both targets are relationships with the
+response, so the test split is not read here.
+
+### TARGET_B: the class imbalance
+
+| Quantity | Value |
+| --- | --- |
+| Positives (responded) | 3,874 |
+| Total rows | 76,329 |
+| Training response rate | 5.0754% |
+| Full dataset response rate | 5.0759% |
+| Difference | 0.0005 pp |
+| Negatives per positive | 18.7 |
+
+The stratified split did its job: the training rate matches the full-dataset rate to
+four decimal places, so nothing about the class balance was distorted by splitting.
+
+### What the imbalance means for evaluation
+
+With 5.08% positives, a model that predicts "nobody responds" for every constituent is
+94.92% accurate and completely useless: it finds no donors, which is the only thing the
+model exists to do. Accuracy is therefore not reportable on its own, and CLAUDE.md's
+rule against it is not a formality.
+
+The number to beat is the AUPRC of a random-guessing baseline, which equals the
+positive rate itself: **0.0508**. Any candidate model has to clear that, and clearing it
+by a little is not the same as clearing it usefully. Recall matters alongside AUPRC
+because the cost structure is asymmetric. Mailing a constituent who does not give wastes
+roughly the price of a stamp; failing to mail one who would have given loses the whole
+donation, which averages $15.52 here.
+
+### TARGET_D: donation amounts among responders
+
+Five-number summary for the 3,874 responders in the training split. Non-responders are
+excluded because their `TARGET_D` is a structural 0.0, not a donation of nothing, and
+averaging them in would report a mean of $0.79 that describes nobody.
+
+| Statistic | Amount |
+| --- | ---: |
+| Minimum | $1.00 |
+| 25th percentile | $10.00 |
+| Median | $13.00 |
+| 75th percentile | $20.00 |
+| Maximum | $200.00 |
+| Mean | $15.52 |
+| Std. dev. | $12.41 |
+
+Checked rather than assumed: 0 non-responders have a non-zero `TARGET_D`, and 0 have a
+NaN. The `TARGET_B == 1` and `TARGET_D > 0` definitions of "responded" agree exactly, so
+a later amount model can filter on either without a silent row loss.
+
+The mean sits above the median ($15.52 against $13.00), the usual right skew of donation
+amounts. The maximum of $200 is small enough that this campaign has no whale problem:
+the largest single gift is 13 times the mean, not 1,000 times.
+
+### Figure: `target_d_distribution_responders.png`
+
+**Frame: training split, responders only (n=3,874).** Histogram of `TARGET_D` in $1
+bins, with the median marked.
+
+Donations pile up on round numbers, and the spikes dominate the shape. $10 is the mode
+at 779 responders (20.1%), then $15 (473, 12.2%), $20 (466, 12.0%), $5 (395, 10.2%), and
+$25 (313, 8.1%). Those five amounts alone account for **2,426 of 3,874 responders
+(62.6%)**, and 2,637 (68.1%) gave an exact multiple of $5. The bins between the spikes
+are not empty, but they are thin by comparison: $12 is the most common non-round amount
+at 132 responders (3.4%).
+
+This is a behavioral fact, not a data error, and it has a modeling consequence worth
+recording now. `TARGET_D` is not a smooth continuous variable; it is closer to a choice
+among a few round amounts with a scattering in between. A regression that assumes
+continuity will put predictions in the gaps between the spikes, where almost no real
+donor sits. The $1 bin width in the figure is deliberate: coarser bins would smooth the
+spikes into a lognormal-looking hump and hide the entire point.
+
+---
+
+## 3. Missing data
+
+**Frames: full dataset (95,412 rows) for how much is missing; training split (76,329
+rows) for whether missingness predicts response.**
+
+### Extent
+
+| Category | Columns |
+| --- | ---: |
+| Have at least one NaN | 92 of 481 |
+| Have at least one blank string | 65 of 481 |
+| Have neither | 325 of 481 |
+
+Two-thirds of the dataset (325 columns) is complete on both measures. The gaps are
+concentrated, not spread thin, and the two kinds of gap barely overlap: the NaN columns
+are numeric and the blank columns are strings.
+
+### Figure: `missingness_top20.png`
+
+**Frame: full dataset (n=95,412).** Horizontal bar of the 20 most-missing columns, with
+percentage labels.
+
+Discussed under task 1: the top 20 is entirely `RDATE_*`/`RAMNT_*` pairs, from 99.99%
+(`RDATE_5`, `RAMNT_5`) down to 90.03% (`RDATE_21`, `RAMNT_21`), and each date column
+matches its amount column exactly. Missing here means the constituent did not give to
+that particular mailing. It is a recorded non-event, and reading these bars as "the data
+is 99% broken" would be exactly wrong.
+
+The figure's real use in the report is as a warning about what it does not show. Neither
+`AGE` (24.80%) nor `INCOME` (22.31%) appears anywhere in it, and no blank-carrying
+string column can appear in it at all, because `read_csv` reads a space as data rather
+than as missing.
+
+### AGE and INCOME
+
+**Observed values, frame: full dataset.**
+
+| Column | Missing | % missing | Observed range | Distinct |
+| --- | ---: | ---: | --- | ---: |
+| `AGE` | 23,665 | 24.80% | 1 to 98 | 96 |
+| `INCOME` | 21,286 | 22.31% | 1 to 7 | 7 |
+
+`AGE` has no zero-coded values, so the missingness is honest NaN rather than a sentinel
+hiding in the range. `INCOME` is not a dollar amount: it is a 7-level ordinal bracket,
+which limits how much can be said about a constituent's actual means. The distributions
+of the observed values are plotted under task 4, which covers demographics as a group.
+
+**AGE missingness is `DOB` missingness.** 23,661 rows have `DOB = 0` and `AGE` missing;
+4 rows have `AGE` missing with a real `DOB`; 0 rows have `DOB = 0` and an `AGE`. `AGE` is
+derived from `DOB`, and `DOB = 0` is the vendor's way of writing "unknown" in a numeric
+field. The two columns carry one fact, not two, and imputing `AGE` while leaving `DOB` as
+a raw number would put the same made-up value into the model twice.
+
+### Does missingness predict response?
+
+**Frame: training split (n=76,329).** Overall training response rate: 5.075%.
+
+| Column | Group | n | Response rate | Difference | chi-square | p |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `AGE` | missing | 18,915 | 4.880% | -0.260 pp | 1.945 | 0.1631 |
+| `AGE` | present | 57,414 | 5.140% | | | |
+| `INCOME` | missing | 17,027 | 5.227% | +0.195 pp | 1.005 | 0.3160 |
+| `INCOME` | present | 59,302 | 5.032% | | | |
+
+**No.** Neither difference is significant at the 0.05 level, and they point in opposite
+directions: constituents with a missing `AGE` respond slightly *less* often, those with a
+missing `INCOME` slightly *more*. Both gaps are under a third of a percentage point on a
+5% base rate. The plan made the indicator-flag recommendation conditional on this test,
+and the test came back null, so the honest answer is that response-rate evidence does not
+support adding missingness flags for these two columns.
+
+That is a weaker claim than "the flags are useless", and the distinction matters. A
+chi-square on the marginal rate cannot see an interaction, so missingness could still
+carry signal conditional on other features. The recommendation in task 6 is therefore to
+try the flags and let cross-validation decide, not to assume they help and not to rule
+them out on this evidence.
+
+### Figure: `response_rate_by_missingness_age_income.png`
+
+**Frame: training split (n=76,329).** Response rate for missing versus present, with the
+overall 5.08% rate as a dashed reference line.
+
+All four bars sit within a quarter of a percentage point of the reference line, which is
+the finding. The y axis starts at zero and runs to 8% rather than zooming into the
+4.8-5.3% range: a zoomed axis would turn four near-identical bars into two dramatic
+contrasts and manufacture an effect the chi-square says is not there. This is the
+"trustworthy axes" standard doing actual work rather than being a style note.
+
+### Disguised missingness
+
+**Frame: full dataset.** The blank-string pattern affects 65 of 74 string columns. Worst
+12:
+
+| Column | % blank | Group | Column | % blank | Group |
+| --- | ---: | --- | --- | ---: | --- |
+| `RECPGVG` | 99.88 | id_admin | `CHILD03` | 98.80 | demographics |
+| `SOLP3` | 99.81 | id_admin | `MAILCODE` | 98.53 | id_admin |
+| `MAJOR` | 99.69 | id_admin | `PVASTATE` | 98.47 | id_admin |
+| `PLATES` | 99.41 | interests_overlay | `KIDSTUFF` | 98.39 | interests_overlay |
+| `HOMEE` | 99.07 | interests_overlay | `CHILD07` | 98.36 | demographics |
+| `CARDS` | 98.91 | interests_overlay | `RECSWEEP` | 98.31 | id_admin |
+
+These are not all the same thing, and the report should not treat them as one problem.
+Most are flag columns where blank is a real value meaning "no": `RECSWEEP` blank means
+"not a sweepstakes donor", and `PLATES` blank means "no collector-plate interest
+recorded". For those, blank is informative and imputing it would be a mistake. Others are
+genuine unknowns: `HOMEOWNR` is 23.3% blank alongside `H` and `U` codes, and a blank
+there means the vendor did not know, not that the person owns no home. `GEOCODE` at 84.0%
+blank is a third case, a mostly-unpopulated column.
+
+Telling these apart needs the data dictionary, not inference from the frequencies, and
+that is a task 6 handling recommendation rather than something this pass decides.
+
+**Numeric columns hide missingness too**, by coding it as 0 rather than NaN:
+
+| Column | Rows coded 0 | % | Real range otherwise |
+| --- | ---: | ---: | --- |
+| `DOB` | 23,661 | 24.80% | 1 to 9710 (YYMM) |
+| `FISTDATE` | 2 | 0.00% | 4912 to 9603 (YYMM) |
+
+A YYMM date of 0 is not a date. `DOB = 0` is the `AGE` missingness described above,
+wearing a different costume. `FISTDATE = 0` affects 2 rows and is negligible, but it is
+the same defect and is listed so nobody rediscovers it later as a mysterious outlier.
+Any downstream code that converts these fields to dates or treats them as numbers has to
+handle the zeros first, because a model given `DOB = 0` will read it as a birth date in
+1900, not as a missing value.
