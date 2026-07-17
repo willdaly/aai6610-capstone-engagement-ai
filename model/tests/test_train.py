@@ -24,6 +24,10 @@ import pytest
 
 from train import (
     AUPRC_FLOOR,
+    FAIRNESS_PATH,
+    GRID_PATH,
+    RESULTS_PATH,
+    write_table,
     EXPECTED_FIGURES,
     MAIL_COST,
     MISSING_SEGMENT,
@@ -365,6 +369,34 @@ class TestFairnessSlices:
         slices = fairness_slices(broken, np.full(6, 0.9), 0.5)
         gender = slices[slices["attribute"] == "GENDER"]
         assert gender["n"].sum() == len(broken)
+
+
+class TestOutputWriting:
+    """The clean-state property, which is the one a repeat run cannot check.
+
+    Every table lands under docs/modeling/, and that directory is gitignored output.
+    On a fresh checkout it does not exist. A writer that assumes it does works forever
+    on the machine that created it and fails on everyone else's, which is why this is
+    tested rather than observed.
+    """
+
+    def test_write_table_creates_a_missing_directory(self, tmp_path):
+        target = tmp_path / "does" / "not" / "exist" / "table.csv"
+        frame = pd.DataFrame({"a": [1, 2]})
+        write_table(frame, target)
+        assert target.exists()
+        pd.testing.assert_frame_equal(pd.read_csv(target), frame)
+
+    def test_write_table_overwrites_rather_than_appends(self, tmp_path):
+        target = tmp_path / "table.csv"
+        write_table(pd.DataFrame({"a": [1, 2, 3]}), target)
+        write_table(pd.DataFrame({"a": [9]}), target)
+        assert pd.read_csv(target)["a"].tolist() == [9]
+
+    def test_every_table_shares_one_output_directory(self):
+        # If a table is ever written somewhere else, the guarantee above stops
+        # covering it.
+        assert RESULTS_PATH.parent == GRID_PATH.parent == FAIRNESS_PATH.parent
 
 
 class TestFigureDeclaration:

@@ -75,6 +75,7 @@ RESULTS_PATH = MODELING_DIR / "results.csv"
 # answers "by how much, and did the grid stop too early", which is the question a
 # best-params-only table cannot. It costs nothing: the search already computed it.
 GRID_PATH = MODELING_DIR / "cv_grid.csv"
+FAIRNESS_PATH = MODELING_DIR / "fairness_slices.csv"
 ARTIFACTS_DIR = REPO_ROOT / "model" / "artifacts"
 
 # The campaign's documented mail cost per contact (plan, objective section). Net
@@ -300,21 +301,46 @@ def report_cv(rows: list[dict]) -> None:
     print()
 
 
+def write_table(frame: pd.DataFrame, path: Path) -> pd.DataFrame:
+    """Write one CSV under docs/modeling/, creating the directory if it is not there.
+
+    Every table this script emits goes through here, so that on a clean checkout, where
+    docs/modeling/ does not exist yet, it cannot matter which table is written first.
+    That is not a hypothetical: the fairness table is written before results.csv, and
+    results.csv used to be the only thing creating the directory, so the script only
+    ever worked on a machine that had already run it once.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, index=False)
+    print(f"Wrote {_display_path(path)} ({len(frame)} rows)")
+    return frame
+
+
+def _display_path(path: Path) -> str:
+    """Repo-relative when it can be, absolute otherwise.
+
+    relative_to raises on anything outside the repo, which would turn a log line into
+    the reason a test writing to a temp directory fails.
+    """
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def write_results(rows: list[dict]) -> pd.DataFrame:
     """Write docs/modeling/results.csv (one row per model) and cv_grid.csv (every point).
 
     The fitted estimator is dropped: results.csv is a table of numbers for the
     findings doc, and the pipelines go to model/artifacts/ instead.
     """
-    MODELING_DIR.mkdir(parents=True, exist_ok=True)
     dropped = {"estimator", "cv_results"}
-    frame = pd.DataFrame([{k: v for k, v in row.items() if k not in dropped} for row in rows])
-    frame.to_csv(RESULTS_PATH, index=False)
-    print(f"Wrote {RESULTS_PATH.relative_to(REPO_ROOT)} ({len(frame)} rows)")
-
-    grid = pd.concat([row["cv_results"] for row in rows], ignore_index=True)
-    grid.to_csv(GRID_PATH, index=False)
-    print(f"Wrote {GRID_PATH.relative_to(REPO_ROOT)} ({len(grid)} rows)\n")
+    frame = write_table(
+        pd.DataFrame([{k: v for k, v in row.items() if k not in dropped} for row in rows]),
+        RESULTS_PATH,
+    )
+    write_table(pd.concat([row["cv_results"] for row in rows], ignore_index=True), GRID_PATH)
+    print()
     return frame
 
 
@@ -1039,7 +1065,7 @@ def main() -> None:
     slices = fairness_slices(validation, best_proba, chosen["threshold"])
     report_fairness(slices)
     figure_fairness(slices, chosen["threshold"])
-    slices.to_csv(MODELING_DIR / "fairness_slices.csv", index=False)
+    write_table(slices, FAIRNESS_PATH)
 
     for row in rows:
         peak = curves[row["model"]]["net_revenue"].max()
