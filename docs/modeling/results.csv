@@ -1,5 +1,6 @@
-model,params,cv_auprc_mean,cv_auprc_std,cv_fit_seconds,grid_size,note,val_net_revenue_peak,val_threshold,val_contacts,val_contact_fraction,val_precision,val_recall,val_net_revenue
-dummy,{},0.050753972281217766,2.487346455254391e-05,5.3,1,,1230.2,,,,,,
-logistic,"{""model__C"": 0.001}",0.07996310035604641,0.005797228794702992,19.9,5,,1234.44,,,,,,
-random_forest,"{""model__max_depth"": 8, ""model__n_estimators"": 500}",0.08125162434709778,0.005648500360379291,112.5,6,,1208.44,,,,,,
-hist_gradient_boosting,"{""model__learning_rate"": 0.1, ""model__max_depth"": 3}",0.08379420380174538,0.003973981063756943,28.7,6,,1291.88,0.383615,9734.0,0.8501,0.0558,0.9346,1291.88
+model,params,cv_auprc_mean,cv_auprc_std,cv_fit_seconds,grid_size,note,val_net_revenue_peak,val_threshold,val_contacts,val_contact_fraction,val_precision,val_recall,val_net_revenue,test_auprc,test_threshold,test_contacts,test_contact_fraction,test_precision,test_recall,test_net_revenue,test_net_revenue_contact_all
+dummy,{},0.050753972281217766,2.487346455254391e-05,5.4,1,,1230.2,,,,,,,,,,,,,,
+logistic,"{""model__C"": 0.001}",0.07996310035604641,0.005797228794702992,18.6,5,,1234.44,,,,,,,,,,,,,,
+random_forest,"{""model__max_depth"": 8, ""model__n_estimators"": 500}",0.08125162434709778,0.005648500360379291,108.2,6,,1208.44,,,,,,,,,,,,,,
+hist_gradient_boosting,"{""model__learning_rate"": 0.1, ""model__max_depth"": 3}",0.08379420380174538,0.003973981063756943,24.4,6,,1291.88,0.383615,9734.0,0.8501,0.0558,0.9346,1291.88,0.0881,0.383615,15882.0,0.8323,0.0559,0.9164,2774.74,2562.06
+hist_gradient_boosting_with_census,"{""model__learning_rate"": 0.1, ""model__max_depth"": 3}",0.0824214552510899,0.0038997827193779163,14.4,1,"census experiment: baseline pipeline plus the 290 census columns, same params, same CV. Not a candidate for deployment.",,,,,,,,,,,,,,,

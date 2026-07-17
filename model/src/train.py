@@ -49,7 +49,12 @@ from sklearn.ensemble import (  # noqa: E402
     RandomForestClassifier,
 )
 from sklearn.linear_model import LogisticRegression  # noqa: E402
-from sklearn.model_selection import GridSearchCV, StratifiedKFold  # noqa: E402
+from sklearn.metrics import average_precision_score  # noqa: E402
+from sklearn.model_selection import (  # noqa: E402
+    GridSearchCV,
+    StratifiedKFold,
+    cross_val_score,
+)
 
 from eda import (  # noqa: E402
     ACCENT,
@@ -823,6 +828,145 @@ def figure_fairness(slices: pd.DataFrame, threshold: float) -> None:
     save_figure(fig, "fairness_slices.png")
 
 
+# ---------------------------------------------------------------------------
+# The census experiment (training portion, same CV)
+# ---------------------------------------------------------------------------
+
+
+def census_experiment(spec: ModelSpec, params: dict, X: pd.DataFrame, y: pd.Series) -> dict:
+    """The best model's pipeline with the 290 census columns added. Frame: train_full.
+
+    Exactly one run, as the plan specifies: the same model at the same tuned
+    hyperparameters, scored by the same CV object on the same rows, with the only
+    difference being the census block. Re-tuning here would confound the question,
+    because a difference in score could then be the neighbourhood data or could be the
+    new hyperparameters.
+
+    This is a headline result for the ethics section rather than a footnote. The
+    baseline excludes the census because neighbourhood-derived prediction is where
+    proxy discrimination concentrates (plan, feature policy), and the dataset is 60.3%
+    census columns against 2.7% individual demographics (findings task 1). What the
+    report needs is the price of that exclusion in predictive terms, stated honestly in
+    both directions: what accuracy the exclusion costs, and what it buys.
+    """
+    pipeline = build_pipeline(
+        spec.estimator,
+        scale_numeric=spec.scale_numeric,
+        include_census=True,
+        columns=list(X.columns),
+    )
+    pipeline.set_params(**params)
+
+    started = time.perf_counter()
+    scores = cross_val_score(pipeline, X, y, scoring=CV_SCORING, cv=CV, n_jobs=-1)
+    elapsed = time.perf_counter() - started
+
+    return {
+        "cv_auprc_mean": float(scores.mean()),
+        "cv_auprc_std": float(scores.std()),
+        "cv_fit_seconds": round(elapsed, 1),
+    }
+
+
+def report_census(name: str, baseline: dict, with_census: dict) -> None:
+    """Print the census delta in both directions. Frame: train_full, same 5-fold CV."""
+    delta = with_census["cv_auprc_mean"] - baseline["cv_auprc_mean"]
+    print("=" * 78)
+    print(f"CENSUS EXPERIMENT  Frame: training portion (n=76,329), same 5-fold CV. Model: {name}.")
+    print("=" * 78)
+    print(f"\n  {'feature set':<28} {'CV AUPRC':>10} {'std':>8} {'vs floor':>10} {'secs':>7}")
+    for label, row in (
+        ("baseline (no census)", baseline),
+        ("baseline + census (290 cols)", with_census),
+    ):
+        print(
+            f"  {label:<28} {row['cv_auprc_mean']:>10.4f} {row['cv_auprc_std']:>8.4f} "
+            f"{row['cv_auprc_mean'] / AUPRC_FLOOR:>9.2f}x {row['cv_fit_seconds']:>7.1f}"
+        )
+    print(
+        f"\n  Delta from adding the census block: {delta:+.4f} AUPRC "
+        f"({delta / baseline['cv_auprc_mean'] * 100:+.1f}%)"
+    )
+    print(
+        f"  Fold-to-fold SD of the baseline is {baseline['cv_auprc_std']:.4f}, so a delta\n"
+        f"  smaller than that is not a difference this experiment can resolve.\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The test split. Read once, here, and nowhere else.
+# ---------------------------------------------------------------------------
+
+
+def evaluate_on_test(
+    spec: ModelSpec,
+    params: dict,
+    threshold: float,
+    X_train_full: pd.DataFrame,
+    y_train_full: pd.Series,
+    test: pd.DataFrame,
+) -> dict:
+    """Evaluate the frozen configuration on the held-out test split. Once.
+
+    This is the only function in the module that reads the test frame, and main calls
+    it last, after the model family, its hyperparameters and the operating threshold
+    are all fixed. Nothing it measures can feed back into any of those choices, which
+    is what makes the number it returns worth reporting.
+
+    The model is refitted on the full training portion here rather than reused from the
+    validation stage: the threshold was chosen with a model fitted on train_inner, but
+    the campaign would ship a model fitted on everything it has. That mismatch is
+    deliberate and worth stating in the findings, because the refitted model's
+    probability scale can shift slightly under a threshold chosen from the other one.
+
+    Args:
+        spec: The winning model family.
+        params: Its CV-chosen hyperparameters.
+        threshold: The operating threshold chosen on validation. Frozen.
+        X_train_full: Features for the whole training portion.
+        y_train_full: TARGET_B for the whole training portion.
+        test: The raw held-out frame.
+
+    Returns:
+        Test metrics: AUPRC, and the contact set at the frozen threshold.
+    """
+    X_test, y_test, amounts_test = make_xy(test)
+    estimator = fit_spec(spec, params, X_train_full, y_train_full)
+    proba = estimator.predict_proba(X_test)[:, 1]
+
+    y_array = y_test.to_numpy()
+    amounts_array = amounts_test.to_numpy()
+
+    result = metrics_at_threshold(y_array, amounts_array, proba, threshold)
+    result["auprc"] = float(average_precision_score(y_array, proba))
+    result["everyone"] = net_revenue(
+        y_array, amounts_array, np.ones(len(y_array), dtype=bool)
+    )
+    result["n"] = len(y_array)
+    result["positive_rate"] = float(y_array.mean())
+
+    print("=" * 78)
+    print(f"TEST EVALUATION  Frame: held-out test split (n={len(y_array):,}). Model: {spec.name}.")
+    print("=" * 78)
+    print("\n  Read once, after the model, its parameters and the threshold were frozen.")
+    print(f"  Fitted on the full training portion (n={len(y_train_full):,}).\n")
+    print(f"  AUPRC                        {result['auprc']:.4f}")
+    print(f"  AUPRC floor (positive rate)  {result['positive_rate']:.4f}")
+    print(f"  Lift over floor              {result['auprc'] / result['positive_rate']:.2f}x")
+    print(f"\n  At the frozen threshold {threshold:.4f}:")
+    print(f"    contacts       {result['contacts']:,} of {result['n']:,} ({result['contact_fraction'] * 100:.1f}%)")
+    print(f"    precision      {result['precision'] * 100:.2f}%")
+    print(f"    recall         {result['recall'] * 100:.2f}%")
+    print(f"    net revenue    ${result['net_revenue']:,.2f}")
+    print(f"    contact all    ${result['everyone']:,.2f}")
+    print(
+        f"    gain           ${result['net_revenue'] - result['everyone']:,.2f} "
+        f"({(result['net_revenue'] / result['everyone'] - 1) * 100:+.1f}% over mailing everyone)"
+    )
+    print()
+    return result
+
+
 def main() -> None:
     """Run the phase in plan order. The test split is read once, at the end."""
     apply_style()
@@ -909,6 +1053,53 @@ def main() -> None:
             "val_precision": round(chosen["precision"], 4),
             "val_recall": round(chosen["recall"], 4),
             "val_net_revenue": round(chosen["net_revenue"], 2),
+        }
+    )
+
+    # The census experiment, on the training portion. Still no test rows.
+    best_spec = next(s for s in model_specs() if s.name == best_name)
+    best_params = json.loads(best_row["params"])
+    with_census = census_experiment(best_spec, best_params, X_train_full, y_train_full)
+    report_census(best_name, best_row, with_census)
+    rows.append(
+        {
+            "model": f"{best_name}_with_census",
+            "params": best_row["params"],
+            "cv_auprc_mean": with_census["cv_auprc_mean"],
+            "cv_auprc_std": with_census["cv_auprc_std"],
+            "cv_fit_seconds": with_census["cv_fit_seconds"],
+            "grid_size": 1,
+            "note": (
+                "census experiment: baseline pipeline plus the 290 census columns, same "
+                "params, same CV. Not a candidate for deployment."
+            ),
+            "cv_results": pd.DataFrame(
+                {
+                    "model": [f"{best_name}_with_census"],
+                    "params": [best_row["params"]],
+                    "cv_auprc_mean": [with_census["cv_auprc_mean"]],
+                    "cv_auprc_std": [with_census["cv_auprc_std"]],
+                    "rank": [1],
+                }
+            ),
+        }
+    )
+
+    # Everything above this line is frozen: the model family, its hyperparameters, and
+    # the operating threshold. The test split has not been read.
+    test_result = evaluate_on_test(
+        best_spec, best_params, chosen["threshold"], X_train_full, y_train_full, test
+    )
+    best_row.update(
+        {
+            "test_auprc": round(test_result["auprc"], 4),
+            "test_threshold": round(test_result["threshold"], 6),
+            "test_contacts": test_result["contacts"],
+            "test_contact_fraction": round(test_result["contact_fraction"], 4),
+            "test_precision": round(test_result["precision"], 4),
+            "test_recall": round(test_result["recall"], 4),
+            "test_net_revenue": round(test_result["net_revenue"], 2),
+            "test_net_revenue_contact_all": round(test_result["everyone"], 2),
         }
     )
 

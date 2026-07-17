@@ -17,3 +17,4 @@ hist_gradient_boosting,"{""model__learning_rate"": 0.05, ""model__max_depth"": n
 hist_gradient_boosting,"{""model__learning_rate"": 0.1, ""model__max_depth"": 3}",0.08379420380174538,0.003973981063756943,1
 hist_gradient_boosting,"{""model__learning_rate"": 0.1, ""model__max_depth"": 6}",0.08097414658864661,0.004915566123668173,6
 hist_gradient_boosting,"{""model__learning_rate"": 0.1, ""model__max_depth"": null}",0.0819514127550888,0.004710807146766884,5
+hist_gradient_boosting_with_census,"{""model__learning_rate"": 0.1, ""model__max_depth"": 3}",0.0824214552510899,0.0038997827193779163,1

@@ -10,9 +10,13 @@ take minutes and would write into docs/ as a side effect, which a test run shoul
 do. Those are verified by running `python model/src/train.py` from a clean state,
 exactly as the EDA's tests are.
 
-The plan's central ground rule, that the test split is read exactly once, is asserted
-against train.py's source in TestFrameDiscipline, which lands with evaluate_on_test.
+The frame discipline gets its own class. The plan's central ground rule is that the
+test split is read exactly once, after every choice is frozen, and "we were careful"
+is not a check. TestFrameDiscipline asserts it against train.py's own syntax tree.
 """
+
+import ast
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -30,6 +34,128 @@ from train import (
     net_revenue,
     revenue_curve,
 )
+
+TRAIN_SOURCE = Path(__file__).resolve().parents[1] / "src" / "train.py"
+
+# Calls in main that fit a model, tune it, or choose an operating point. Every one of
+# them must happen before the test split is read, or the number reported from that
+# split is contaminated by a choice made after seeing it.
+CHOICE_CALLS = {"run_cv", "choose_threshold", "census_experiment", "fit_spec"}
+
+
+@pytest.fixture(scope="module")
+def tree():
+    """train.py's syntax tree, for the frame-discipline checks."""
+    return ast.parse(TRAIN_SOURCE.read_text())
+
+
+def function_named(tree, name):
+    """The FunctionDef node for `name`, or an assertion failure naming it."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} is not defined in train.py")
+
+
+def calls_in(node) -> set:
+    """Names of every function called anywhere under `node`."""
+    return {
+        inner.func.id
+        for inner in ast.walk(node)
+        if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+    }
+
+
+class TestFrameDiscipline:
+    """The plan's central ground rule, asserted against the source rather than trusted.
+
+    "The test split is touched exactly once, by the final evaluation function, after
+    every model and threshold choice is frozen." These read train.py's AST and hold the
+    structure to that rule, so a future edit that scores the test frame in the middle
+    of development fails here rather than quietly invalidating every reported number.
+    """
+
+    def test_the_test_evaluation_function_exists_and_is_named_for_what_it_does(self, tree):
+        node = function_named(tree, "evaluate_on_test")
+        assert ast.get_docstring(node), "evaluate_on_test needs a docstring"
+
+    def test_main_calls_the_test_evaluation_exactly_once(self, tree):
+        main = function_named(tree, "main")
+        calls = [
+            node
+            for node in ast.walk(main)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "evaluate_on_test"
+        ]
+        assert len(calls) == 1, f"evaluate_on_test called {len(calls)} times in main"
+
+    def test_nothing_is_fitted_or_chosen_after_the_test_split_is_read(self, tree):
+        """The rule that actually matters, and it is about order, not line count.
+
+        evaluate_on_test is not literally main's last statement: its metrics still have
+        to be recorded, and write_results runs after it. What must hold is that no
+        model is fitted, tuned, or thresholded once the test rows have been seen. That
+        is what "frozen" means, and it is what this asserts.
+        """
+        main = function_named(tree, "main")
+        statements = list(main.body)
+        index = next(
+            i
+            for i, node in enumerate(statements)
+            if "evaluate_on_test" in calls_in(node)
+        )
+        after = set()
+        for node in statements[index + 1 :]:
+            after |= calls_in(node) & CHOICE_CALLS
+        assert not after, (
+            f"{sorted(after)} run after the test split is read. Every choice must be "
+            "frozen before evaluate_on_test."
+        )
+
+    def test_every_choice_is_made_before_the_test_split_is_read(self, tree):
+        main = function_named(tree, "main")
+        statements = list(main.body)
+        index = next(
+            i
+            for i, node in enumerate(statements)
+            if "evaluate_on_test" in calls_in(node)
+        )
+        before = set()
+        for node in statements[:index]:
+            before |= calls_in(node) & CHOICE_CALLS
+        # The phase is not real unless the tuning, the threshold and the census run all
+        # actually happened first.
+        assert {"run_cv", "choose_threshold", "census_experiment"} <= before
+
+    def test_no_other_function_touches_the_test_frame(self, tree):
+        """Only evaluate_on_test and main may name a test frame.
+
+        main is allowed because it is where the split happens and where the frame is
+        handed to evaluate_on_test. Everything else naming one is a stage scoring rows
+        it must not see.
+        """
+        offenders = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if node.name in {"evaluate_on_test", "main"}:
+                continue
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Name) and inner.id in {"test", "X_test", "y_test"}:
+                    offenders.add(node.name)
+        assert not offenders, f"functions naming the test frame: {sorted(offenders)}"
+
+    def test_the_validation_analyses_fit_on_train_inner(self, tree):
+        """Threshold, calibration and fairness must use models blind to validation.
+
+        A model refitted on train_full has seen every validation row, so a threshold
+        chosen from its validation scores would be chosen on training data.
+        """
+        main = function_named(tree, "main")
+        names = {n.id for n in ast.walk(main) if isinstance(n, ast.Name)}
+        assert "X_inner" in names and "y_inner" in names
+
 
 class TestNetRevenue:
     def test_contacting_no_one_earns_nothing(self):
