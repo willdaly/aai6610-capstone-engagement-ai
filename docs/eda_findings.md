@@ -587,3 +587,188 @@ giving behavior rather than from who the constituent is. That is a good property
 project: the strongest predictors are things constituents *did*, not demographics they
 were born into. Neither raw giving-history correlations nor the 290-column census block
 produced anything comparable at this stage.
+
+---
+
+## 6. Data quality worries for the report
+
+Everything in this section is a **recommendation, not a decision**. Imputation, encoding,
+feature selection, and modeling are out of scope for this pass. The point is to hand the
+next pass a list of what it has to answer, not to answer it here.
+
+### Near-constant columns
+
+**21 of 481 columns** have a single value covering more than 99% of rows, counting NaN as
+a value (a 99%-missing column is as useless to a model as a 99%-single-code one, for the
+same reason).
+
+| Column | Top share | Value | Column | Top share | Value |
+| --- | ---: | --- | --- | ---: | --- |
+| `RFA_2R` | 100.00% | `L` | `RDATE_4` | 99.71% | NaN |
+| `RAMNT_5` | 99.99% | NaN | `MDMAUD_F` | 99.69% | `X` |
+| `ADATE_2` | 99.99% | `9706` | `MDMAUD_R` | 99.69% | `X` |
+| `RDATE_5` | 99.99% | NaN | `MDMAUD_A` | 99.69% | `X` |
+| `RECPGVG` | 99.88% | blank | `MAJOR` | 99.69% | blank |
+| `SOLP3` | 99.81% | blank | `MDMAUD` | 99.69% | `XXXX` |
+| `RAMNT_3` | 99.75% | NaN | `NOEXCH` | 99.66% | `0` |
+| `RDATE_3` | 99.75% | NaN | `MAXADATE` | 99.58% | `9702` |
+| `RAMNT_4` | 99.71% | NaN | `PLATES` | 99.41% | blank |
+| `RDATE_6` | 99.19% | NaN | `HOMEE` | 99.07% | blank |
+| `RAMNT_6` | 99.19% | NaN | | | |
+
+`RFA_2R` is the only **fully** constant column: `L` for all 95,412 rows, zero variance,
+zero information. It cannot help any model and should not be a judgment call.
+
+> **Recommendation:** drop `RFA_2R` outright. For the other 20, test dropping them rather
+> than assuming: `MDMAUD_*` at 99.69% `X` still flags 294 major donors, and a rare flag
+> that is real can matter for a rare target. Decide by cross-validation, not by threshold.
+
+### High-cardinality categoricals
+
+**24 string columns** have more than 50 distinct values.
+
+| Column | Distinct | Group |
+| --- | ---: | --- |
+| `ZIP` | 19,938 | geography |
+| `OSOURCE` | 896 | id_admin |
+| `RFA_16` and 19 other `RFA_*` code columns | 64 to 123 | promotion_history |
+| `STATE` | 57 | geography |
+| `CLUSTER` | 54 | geography |
+
+One-hot encoding `ZIP` would add 19,938 columns to a dataset that has 481, most of them
+firing for a handful of rows. `OSOURCE` at 896 levels has the same problem in miniature.
+The `RFA_*` history columns are high-cardinality for a structural reason worth noting:
+each is a concatenated three-part code (recency, frequency, amount), so 100-plus levels
+is really three small categoricals glued into one string.
+
+> **Recommendation:** do not one-hot `ZIP` or `OSOURCE`. Options to test: drop `ZIP` in
+> favor of the census block, which already encodes neighborhood; or target-encode it
+> using training-split statistics only, which is a leakage risk that has to be handled
+> inside cross-validation folds rather than before the split. `STATE` at 57 levels is
+> one-hot-able. For the `RFA_*` history columns, split each into its R/F/A components as
+> the dataset already does for `RFA_2`, rather than encoding the concatenated string.
+
+### Date fields stored as numbers
+
+**8 named date fields plus 23 `ADATE_*` and 22 `RDATE_*` columns**, 53 in total, are
+stored as YYMM integers.
+
+| Column | Range | Rows coded 0 |
+| --- | --- | ---: |
+| `ODATEDW` | 8306 to 9701 | 0 |
+| `DOB` | 0 to 9710 | 23,661 |
+| `MAXADATE` | 9608 to 9702 | 0 |
+| `MINRDATE` | 7506 to 9702 | 0 |
+| `MAXRDATE` | 7510 to 9702 | 0 |
+| `LASTDATE` | 9503 to 9702 | 0 |
+| `FISTDATE` | 0 to 9603 | 2 |
+| `NEXTDATE` | 7211 to 9702 | 0 |
+
+Left as integers, these are actively misleading to a model. The arithmetic gap between
+9612 (December 1996) and 9701 (January 1997) is 89, while the gap between 9601 and 9612
+is 11, so one month reads as eight times longer than eleven months. Two of them also code
+missingness as 0 (`DOB`, 23,661 rows; `FISTDATE`, 2 rows), and 0 in a YYMM field is not a
+date.
+
+> **Recommendation:** convert to a real date, then derive a duration relative to a fixed
+> reference (the campaign date, 9702) rather than feeding the model a date at all. Handle
+> the zeros as missing before converting, or a `DOB` of 0 becomes a birth date in 1900.
+
+### Sparse per-promotion columns
+
+**20 columns are more than 90% missing**, all in the giving-history group, all
+`RDATE_*`/`RAMNT_*` pairs. As task 1 and 3 discuss, missing here means "did not give to
+that mailing", a recorded non-event.
+
+> **Recommendation:** do not impute these; imputing a donation amount for a mailing
+> somebody ignored invents data. Either drop them in favor of the summary columns
+> (`NGIFTALL`, `RAMNTALL`, `AVGGIFT`) that already aggregate the same history, or
+> re-express each pair as an explicit "responded to promotion N" indicator, which turns
+> 90% missingness into a clean binary. The second option is closer to what `RFA_2F`
+> already does, and `RFA_2F` is the strongest signal in the EDA.
+
+### Class imbalance
+
+5.075% positive in the training split, 18.7 negatives per positive.
+
+> **Recommendation:** already settled by CLAUDE.md and restated here because it is a data
+> property, not a modeling preference: report AUPRC and recall, never accuracy alone. The
+> baseline to beat is 0.0508. The planned lineup (balanced random forest, cost-sensitive
+> gradient boosting) addresses the imbalance through class weights; test resampling
+> against class weighting rather than assuming either.
+
+### Implausible values
+
+| Finding | Extent | Frame |
+| --- | --- | --- |
+| `AGE` under 20 | 40 rows, 15 aged 5 or under, 9 aged exactly 1 | training |
+| `LASTGIFT` zeros | 304 rows, plus one gift of exactly $0.01 | training |
+| `MINRAMNT` zeros | 459 rows | training |
+| `GENDER` codes appearing once | `C`, `A` | training |
+| `POP901` = 0 | 799 rows | full |
+| `MALEVET` = 0 | 3,318 rows | full |
+| `HV1` = 0 | 1,117 rows | full |
+
+A one-year-old with a giving history is bad data. A "most recent gift" of $0.00 is not a
+gift. A neighborhood with a population of 0 and a median home value of $0 does not exist,
+and since that pattern repeats across the 290-column census block, it is the largest
+instance of disguised missingness in the dataset and NaN-based reporting cannot see any
+of it. `MALEVET = 0` is genuinely ambiguous: a neighborhood really can have no male
+veterans, so zero there may be a true value.
+
+> **Recommendation:** treat `AGE < 20` as missing rather than dropping the 40 rows;
+> dropping rows for a 5%-positive target is a cost worth avoiding, and the rows' other
+> 480 fields are fine. Collapse `GENDER` `C`/`A` into the existing unknown category, and
+> merge blank with `U`, which already means unknown. For the census zeros, check
+> `POP901 = 0` and `HV1 = 0` against the data dictionary before deciding: if they are
+> unmatched zip codes, they are missing across all 290 columns at once and need a
+> row-level indicator, not 290 separate imputations.
+
+### Multicollinearity in giving history
+
+| Pair | r |
+| --- | ---: |
+| `NGIFTALL` / `CARDGIFT` | 0.91 |
+| `LASTGIFT` / `AVGGIFT` | 0.79 |
+| `MINRAMNT` / `AVGGIFT` | 0.76 |
+| `MAXRAMNT` / `AVGGIFT` | 0.75 |
+
+The giving-history block carries fewer independent facts than its column count suggests.
+
+> **Recommendation:** matters for the logistic regression baseline, where correlated
+> predictors make coefficients unstable and their signs uninterpretable, and the
+> coefficients are what the report will use to explain the model in plain language. Test
+> regularization or drop one of each pair. The tree models are largely indifferent to
+> this, so it is not a reason to change the planned lineup.
+
+### Disguised missingness in categorical codes
+
+65 of 74 string columns carry blanks (task 3). These are not one problem and should not
+get one fix. Blank means "no" in the flag columns (`RECSWEEP`, `PLATES`), "unknown" in
+`HOMEOWNR` (23.3% blank alongside `H`/`U`), and something else again in `GEOCODE` (84.0%
+blank).
+
+> **Recommendation:** resolve each against the data dictionary before encoding, and do
+> not apply a blanket rule. Getting this wrong is silent: blank encoded as a category
+> when it means "unknown" invents a group, and blank imputed when it means "no" destroys
+> a real distinction. Neither shows up as an error, only as a slightly worse metric that
+> nobody can explain.
+
+---
+
+## What this pass did not do
+
+No imputation, no encoding, no feature selection, no models, no assistant work, per the
+plan's scope. Every recommendation above is unresolved on purpose.
+
+The findings that most affect the next pass, in order:
+
+1. `RFA_2A` and `RFA_2F` are the signals worth building on (2.75x and 2.21x, both
+   monotonic with non-overlapping intervals).
+2. Response rate and donation amount pull in opposite directions, so a `TARGET_B`-only
+   objective systematically prefers the constituents who give least.
+3. Raw giving-history correlations with `TARGET_B` are all under 0.06, which argues the
+   signal is in the bands rather than the slopes, and sets expectations for the logistic
+   regression baseline.
+4. The dataset is 60.3% census neighborhood statistics and 2.7% individual demographics,
+   which is what the fairness checks need to be aimed at.

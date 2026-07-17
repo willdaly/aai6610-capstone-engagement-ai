@@ -1311,6 +1311,123 @@ def _figure_correlation(correlations: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 6: data quality worries for the report
+# ---------------------------------------------------------------------------
+
+# A column is "near-constant" when one value covers more than this share of rows. NaN
+# counts as a value here: a column that is 99% missing is just as useless to a model as
+# one that is 99% a single code, and for the same reason.
+NEAR_CONSTANT_THRESHOLD = 0.99
+
+# Above this many distinct values, a categorical cannot be one-hot encoded without
+# adding more columns than the dataset has today.
+HIGH_CARDINALITY_THRESHOLD = 50
+
+# YYMM integer date fields. Listed explicitly rather than matched by name: LASTDATE and
+# NEXTDATE do not share a prefix with ADATE_*/RDATE_*, and MAXADATE looks like a date
+# but MAXRAMNT does not, so a pattern would either miss some or catch the wrong ones.
+DATE_LIKE_COLUMNS = (
+    "ODATEDW",
+    "DOB",
+    "MAXADATE",
+    "MINRDATE",
+    "MAXRDATE",
+    "LASTDATE",
+    "FISTDATE",
+    "NEXTDATE",
+)
+
+
+def near_constant_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Columns where one value (NaN included) covers >99% of rows. Frame: full dataset."""
+    rows = []
+    for column in df.columns:
+        counts = df[column].value_counts(dropna=False)
+        share = float(counts.iloc[0]) / len(df)
+        if share > NEAR_CONSTANT_THRESHOLD:
+            rows.append(
+                {
+                    "column": column,
+                    "top_share": round(share * 100, 2),
+                    "top_value": str(counts.index[0]),
+                }
+            )
+    return pd.DataFrame(rows).sort_values("top_share", ascending=False)
+
+
+def task6_quality(df: pd.DataFrame, train: pd.DataFrame, inventory: pd.DataFrame) -> None:
+    """List what downstream modeling has to handle. Frame: full dataset unless stated.
+
+    Everything here is a recommendation, not a decision. Imputation, encoding, and
+    feature selection are out of scope for this pass (docs/eda_plan.md).
+    """
+    print("=" * 78)
+    print("TASK 6  Data quality worries. Frame: full dataset unless stated.")
+    print("=" * 78)
+
+    near_constant = near_constant_columns(df)
+    print(
+        f"\nNear-constant columns (>{NEAR_CONSTANT_THRESHOLD * 100:.0f}% one value, "
+        f"NaN counted as a value): {len(near_constant)} of 481"
+    )
+    for row in near_constant.itertuples():
+        print(f"  {row.column:<10} {row.top_share:>6.2f}%  value={row.top_value!r}")
+
+    constants = [c for c in df.columns if df[c].nunique(dropna=False) == 1]
+    print(f"\n  Of these, fully constant (exactly 1 distinct value): {constants}")
+
+    high_cardinality = inventory[
+        (inventory["dtype"] == "str") & (inventory["nunique"] > HIGH_CARDINALITY_THRESHOLD)
+    ].sort_values("nunique", ascending=False)
+    print(
+        f"\nHigh-cardinality string columns (>{HIGH_CARDINALITY_THRESHOLD} distinct "
+        f"values): {len(high_cardinality)}"
+    )
+    for row in high_cardinality.itertuples():
+        print(f"  {row.column:<10} {row.nunique:>6,} distinct  group={row.group}")
+
+    print("\nDate fields stored as YYMM integers:")
+    for column in DATE_LIKE_COLUMNS:
+        series = df[column]
+        zeros = int((series == 0).sum())
+        print(
+            f"  {column:<10} range {int(series.min()):>5} to {int(series.max()):>5}, "
+            f"{zeros:>6,} rows coded 0"
+        )
+    n_adate = sum(c.startswith("ADATE_") for c in df.columns)
+    n_rdate = sum(c.startswith("RDATE_") for c in df.columns)
+    print(f"  plus {n_adate} ADATE_* and {n_rdate} RDATE_* columns in the same format")
+
+    sparse = inventory[inventory["pct_missing"] > 90]
+    print(f"\nSparse per-promotion columns (>90% missing): {len(sparse)}")
+    print(f"  All in the giving_history group: {set(sparse['group']) == {'giving_history'}}")
+
+    print("\nClass imbalance. Frame: training split.")
+    rate = float(train[TARGET_BINARY].mean())
+    print(f"  Positive rate {rate * 100:.3f}%, {(1 - rate) / rate:.1f} negatives per positive")
+    print(f"  AUPRC of a random baseline = the positive rate = {rate:.4f}")
+
+    print("\nImplausible values. Frame: training split for AGE, full dataset otherwise.")
+    age = train["AGE"].dropna()
+    print(f"  AGE below 20: {int((age < 20).sum())} rows, of which {int((age <= 5).sum())} are 5 or under")
+    print(f"  LASTGIFT zeros: {int((train['LASTGIFT'] == 0).sum())}, minimum positive ${train.loc[train['LASTGIFT'] > 0, 'LASTGIFT'].min():g}")
+    print(f"  MINRAMNT zeros: {int((train['MINRAMNT'] == 0).sum())}")
+    print(f"  GENDER codes appearing once: {[str(v) for v, n in train['GENDER'].value_counts().items() if n == 1]}")
+    for column, _label in CENSUS_EXEMPLARS:
+        print(f"  {column} zeros: {int((df[column] == 0).sum()):,}")
+
+    print("\nMulticollinearity in giving history. Frame: training split.")
+    correlations = train[list(CORRELATION_COLUMNS)].drop(columns=[TARGET_BINARY]).corr()
+    pairs = []
+    for i, first in enumerate(correlations.columns):
+        for second in correlations.columns[i + 1 :]:
+            pairs.append((abs(correlations.loc[first, second]), first, second))
+    for value, first, second in sorted(pairs, reverse=True)[:4]:
+        print(f"  {first:<10} / {second:<10} r = {value:.2f}")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1333,6 +1450,7 @@ def main() -> None:
     task3_missing(df, train, inventory)
     task4_distributions(train)
     task5_relationships(train)
+    task6_quality(df, train, inventory)
 
 
 if __name__ == "__main__":
