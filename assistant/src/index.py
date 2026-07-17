@@ -194,20 +194,26 @@ class BM25Index:
         )
         return [(chunk, float(score)) for chunk, score in ranked[:k]]
 
-    def top_overlap(self, query: str, top_chunk: "Chunk") -> float:
-        """Fraction of the query's content tokens that appear in the top-ranked chunk.
+    def _chunk_overlap(self, q_tokens: list[str], chunk: "Chunk") -> float:
+        if not q_tokens:
+            return 0.0
+        chunk_tokens = set(tokenize(chunk.text))
+        return sum(1 for tok in q_tokens if tok in chunk_tokens) / len(q_tokens)
+
+    def best_overlap(self, query: str, chunks: list["Chunk"]) -> float:
+        """Best fraction of the query's content tokens covered by any one of ``chunks``.
 
         This is the signal that separates in-scope from out-of-scope on a large, varied
         corpus: an unrelated question may share a common word with *some* page (so
-        corpus-wide coverage is nonzero), but its terms rarely co-occur in the single best
-        chunk. Near 1.0 means the best passage really is about the question.
+        corpus-wide coverage is nonzero), but its terms rarely co-occur in a single good
+        passage. Taken over the top retrieved chunks (not just rank 1), because the best
+        passage for a question is not always the highest BM25 score. Near 1.0 means a
+        retrieved passage really is about the question.
         """
         q_tokens = tokenize(query)
-        if not q_tokens:
+        if not q_tokens or not chunks:
             return 0.0
-        chunk_tokens = set(tokenize(top_chunk.text))
-        present = sum(1 for tok in q_tokens if tok in chunk_tokens)
-        return present / len(q_tokens)
+        return max(self._chunk_overlap(q_tokens, c) for c in chunks)
 
     def query_coverage(self, query: str) -> float:
         """Fraction of the query's content tokens that appear anywhere in the corpus.

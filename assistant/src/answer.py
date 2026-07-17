@@ -38,15 +38,16 @@ SYSTEM_PROMPT_PATH = REPO_ROOT / "assistant" / "system_prompt.md"
 # Retrieval-confidence gate. Three signals, all tuned on the eval set's in-scope vs
 # out-of-scope split (see docs/assistant_findings.md for the distributions):
 #
-# - top_overlap: fraction of the question's content words present in the single
-#   top-ranked chunk. This is the discriminating signal on a large, varied corpus, where
-#   an out-of-scope question can share a common word with some page but its terms do not
-#   co-occur in the best passage.
+# - best_overlap: the best fraction of the question's content words covered by any one of
+#   the top retrieved chunks. This is the discriminating signal on a large, varied corpus,
+#   where an out-of-scope question can share a common word with some page but its terms do
+#   not co-occur in any good passage. On the eval set it separates cleanly: in-scope min
+#   0.40, out-of-scope max 0.33, so 0.35 sits in the gap.
 # - coverage: fraction of the question's content words present anywhere in the corpus. A
 #   cheap first filter for questions about topics the corpus never mentions.
 # - top_score: a raw BM25 floor, so a question that matches nothing at all escalates even
 #   if the overlap arithmetic is generous on a very short query.
-OVERLAP_THRESHOLD = 0.5
+OVERLAP_THRESHOLD = 0.35
 COVERAGE_THRESHOLD = 0.5
 SCORE_THRESHOLD = 1.0
 
@@ -97,7 +98,9 @@ _FIRST_PERSON_MEDICAL_RE = re.compile(r"\b(?:i|we)\s+(?:have|has|got|am|are|was|
 _SYMPTOM_RE = re.compile(
     r"\b(?:seizure|seizures|rash|swelling|swollen|cloudy|bulging|glaucoma|pressure|"
     r"pain|fever|vomit|vomiting|bleeding|bruis|lump|spasm|twitch|stroke|weakness|"
-    r"numb|headache|migraine|symptom|symptoms|birthmark|port[-\s]?wine|stain)\b",
+    r"numb|headache|migraine|symptom|symptoms|birthmark|port[-\s]?wine|stain|"
+    r"mri|ct|eeg|scan|scans|x[-\s]?ray|ultrasound|biopsy|leptomeningeal|"
+    r"calcification|side effect|side[-\s]?effects)\b",
     re.I,
 )
 _TREATMENT_RE = re.compile(
@@ -273,7 +276,7 @@ class Assistant:
         coverage = self.index.query_coverage(query)
         results = self.index.search(query, k=TOP_K)
         top_score = results[0][1] if results else 0.0
-        top_overlap = self.index.top_overlap(query, results[0][0]) if results else 0.0
+        top_overlap = self.index.best_overlap(query, [c for c, _ in results])
         diag = dict(top_score=top_score, coverage=coverage,
                     retrieved_urls=[c.url for c, _ in results])
 
