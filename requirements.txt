@@ -12,6 +12,10 @@ numpy==2.5.1
 scikit-learn==1.9.0
 scipy==1.18.0
 
+# Persisting fitted pipelines to model/artifacts/ (model/src/train.py). Ships as a
+# scikit-learn dependency; pinned here because this repo imports it directly.
+joblib==1.5.3
+
 # Figures for the EDA (model/src/eda.py). Used with the Agg backend only, so no GUI
 # toolkit is needed.
 matplotlib==3.11.0

@@ -1,0 +1,3 @@
+model,params,cv_auprc_mean,cv_auprc_std,cv_fit_seconds,grid_size,note
+dummy,{},0.050753972281217766,2.487346455254391e-05,5.2,1,
+logistic,"{""model__C"": 0.01}",0.07989309354235552,0.005641045609286159,16.5,4,

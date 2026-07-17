@@ -225,3 +225,6 @@ data/
 
 # macOS
 .DS_Store
+
+# Fitted pipelines. Written by model/src/train.py, regenerated on every run.
+model/artifacts/
