@@ -1,0 +1,40 @@
+{
+  "url": "https://larkspur.example.org/education/understanding-larkspur.html",
+  "title": "Understanding Larkspur Syndrome",
+  "http_status": 200,
+  "word_count": 265,
+  "blocks": [
+    {
+      "kind": "heading",
+      "text": "What is Larkspur syndrome?"
+    },
+    {
+      "kind": "text",
+      "text": "Larkspur syndrome is a fictional congenital condition used only to test this assistant. In this made-up description it involves a blue skin marking present at birth and a chance of eye and neurological differences. It is not inherited in any predictable pattern and does not run in families in this invented account. The rest of this page describes made-up educational material a foundation might publish about the condition."
+    },
+    {
+      "kind": "heading",
+      "text": "Common features"
+    },
+    {
+      "kind": "text",
+      "text": "In this fixture the described features include a blue birthmark, a raised chance of increased eye pressure, and a possibility of seizures in some children. The severity varies widely from one child to the next. Some children have only the skin marking and no other findings at all, while others have eye or neurological involvement that needs regular follow-up with specialists who know the condition."
+    },
+    {
+      "kind": "heading",
+      "text": "Watching the eyes"
+    },
+    {
+      "kind": "text",
+      "text": "Increased eye pressure can develop early, so the invented guidance here is that babies with a marking near the eye should be seen by an eye doctor. This is general education, not a recommendation for any specific child. Any decision about a specific child's eyes belongs to that family and their own eye doctor, who can examine the child and advise them directly."
+    },
+    {
+      "kind": "heading",
+      "text": "Seizures"
+    },
+    {
+      "kind": "text",
+      "text": "When seizures occur in this fictional condition, families in the story are told to work with a neurologist. The foundation's role is to help families find such specialists and to explain terms in plain language, never to recommend a particular medication, dose, or treatment plan for a child. Treatment choices are made by a family together with their clinicians."
+    }
+  ]
+}

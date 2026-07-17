@@ -1,0 +1,24 @@
+{
+  "url": "https://larkspur.example.org/for-patients/care-network.html",
+  "title": "Larkspur Clinical Care Network",
+  "http_status": 200,
+  "word_count": 129,
+  "blocks": [
+    {
+      "kind": "heading",
+      "text": "The Care Network"
+    },
+    {
+      "kind": "text",
+      "text": "The Larkspur Clinical Care Network is a fictional list of clinics that have said they are comfortable seeing children with Larkspur syndrome. The network exists so families do not have to explain a rare condition from scratch at every visit. Clinics in the network span eye care, neurology, and general pediatrics in this invented directory."
+    },
+    {
+      "kind": "heading",
+      "text": "Finding a clinic"
+    },
+    {
+      "kind": "text",
+      "text": "To find a clinic in this made-up network, families are directed to the care network page and encouraged to call the foundation's helpline if they need help choosing. The foundation does not refer to a specific clinician or endorse one clinic over another; it simply lists the clinics that have joined the network so families can start a conversation with their own care team about where to go."
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "url": "https://larkspur.example.org/who-we-are/mission.html",
+  "title": "Our Mission - Larkspur Family Foundation",
+  "http_status": 200,
+  "word_count": 142,
+  "blocks": [
+    {
+      "kind": "heading",
+      "text": "Our Mission"
+    },
+    {
+      "kind": "text",
+      "text": "The Larkspur Family Foundation supports families affected by Larkspur syndrome, a rare condition invented for this fixture. We connect families with education, community, and the clinics that understand the condition. We are a small nonprofit run mostly by volunteers and parents who have walked this road before. Our work centers on the families we serve, and everything we publish is meant to help a caregiver find their footing."
+    },
+    {
+      "kind": "heading",
+      "text": "What We Do"
+    },
+    {
+      "kind": "text",
+      "text": "We publish plain-language education about Larkspur syndrome, maintain a directory of clinics in our care network, host an annual family gathering, and offer a small volunteer-run helpline. We do not provide medical care and we do not give medical advice. Instead we point families toward the clinicians and resources that can help them make decisions with their own care team. Membership is free and open to any affected family."
+    }
+  ]
+}
