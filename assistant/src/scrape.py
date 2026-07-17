@@ -41,6 +41,7 @@ import urllib.robotparser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 import requests
@@ -72,6 +73,14 @@ REQUEST_TIMEOUT_SECONDS = 30
 # This is not politeness relief: the per-request delay still applies to every attempt.
 MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = 5.0
+
+# Redirects are followed manually so we can stay on the Foundation's own domain. The plan
+# scopes the corpus to sturge-weber.org: a redirect that leaves the host (for example an
+# event page pointing at a former event's own domain, which may since have lapsed) is
+# recorded and skipped, never fetched. Same-host redirects (trailing slash, http->https)
+# are followed up to a small limit.
+REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+MAX_REDIRECTS = 5
 
 # Forms and data-collection pages. The plan's scope is informational pages only and rule
 # 3 is "no data collection", so a registry sign-up and a contact-update form are out even
@@ -242,40 +251,83 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _same_host(url: str) -> bool:
+    """True if ``url`` is on sturge-weber.org (a leading www. counts as the same host)."""
+    netloc = urlparse(url).netloc.lower()
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+    return netloc == HOST
+
+
+def _get_with_retries(
+    session: requests.Session, url: str, headers: dict
+) -> requests.Response:
+    """A single polite GET (no auto-redirect), retried on transient 5xx and connection
+    errors. Sleeps before every attempt, so the politeness delay applies to re-runs too.
+    Raises the last exception if every attempt fails to connect.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(MAX_RETRIES):
+        time.sleep(REQUEST_DELAY_SECONDS)
+        try:
+            resp = session.get(
+                url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, allow_redirects=False
+            )
+        except requests.RequestException as exc:
+            last_exc = exc
+            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+            continue
+        if resp.status_code >= 500 and attempt < MAX_RETRIES - 1:
+            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+            continue
+        return resp
+    raise last_exc  # type: ignore[misc]
+
+
 def fetch_page(
     session: requests.Session, url: str, cache: dict
-) -> tuple[requests.Response | None, bool]:
-    """Conditional GET. Returns ``(response, from_cache)``.
+) -> tuple[str, object]:
+    """Fetch a page, following only same-host redirects.
 
-    A 304 means the page is unchanged since last run; the cached body is reused and
-    ``from_cache`` is True. Every network call sleeps first, so the politeness delay
-    applies to re-runs too.
+    Returns a tagged result:
+
+    - ``("cache", response)``   the page is unchanged since last run (HTTP 304); reuse the
+      cached body.
+    - ``("offhost", target)``   the URL redirects off sturge-weber.org; ``target`` is the
+      off-host URL. The page is not fetched, per the plan's same-domain scope.
+    - ``("response", response)`` a final, non-redirect response (200 or an error status).
     """
-    headers = {}
     entry = cache.get(url, {})
+    headers = {}
     if entry.get("etag"):
         headers["If-None-Match"] = entry["etag"]
     if entry.get("last_modified"):
         headers["If-Modified-Since"] = entry["last_modified"]
 
-    last_exc: Exception | None = None
-    for attempt in range(MAX_RETRIES):
-        time.sleep(REQUEST_DELAY_SECONDS)
-        try:
-            resp = session.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
-        except requests.RequestException as exc:
-            last_exc = exc
-            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
+    current = url
+    resp = None
+    for _hop in range(MAX_REDIRECTS + 1):
+        resp = _get_with_retries(session, current, headers)
+
+        if resp.status_code == 304 and current == url and entry.get("body") is not None:
+            return "cache", resp
+
+        if resp.status_code in REDIRECT_CODES:
+            location = resp.headers.get("Location")
+            if not location:
+                return "response", resp
+            target = urljoin(current, location)
+            if not _same_host(target):
+                return "offhost", target
+            # Same-host redirect: follow it as a plain GET (conditional headers only
+            # applied to the original URL).
+            current = target
+            headers = {}
             continue
-        if resp.status_code == 304 and entry.get("body") is not None:
-            return resp, True
-        if resp.status_code >= 500 and attempt < MAX_RETRIES - 1:
-            time.sleep(RETRY_BACKOFF_SECONDS * (attempt + 1))
-            continue
-        return resp, False
-    if last_exc is not None:
-        raise last_exc
-    return resp, False
+
+        return "response", resp
+
+    return "response", resp
 
 
 def scrape(
@@ -291,25 +343,33 @@ def scrape(
             continue
 
         try:
-            resp, from_cache = fetch_page(session, url, cache)
+            kind, payload = fetch_page(session, url, cache)
         except requests.RequestException as exc:
             result.failures.append({"url": url, "error": str(exc)})
             continue
 
+        if kind == "offhost":
+            result.excluded.append({"url": url, "reason": f"off-host redirect to {payload}"})
+            print(f"  [skip] off-host redirect -> {payload}  ({url})", file=sys.stderr)
+            continue
+
+        from_cache = kind == "cache"
         if from_cache:
             html = cache[url]["body"]
             status = 200
             etag = cache[url].get("etag")
             last_modified = cache[url].get("last_modified")
-        elif resp.status_code == 200:
-            html = resp.text
-            status = 200
-            etag = resp.headers.get("ETag")
-            last_modified = resp.headers.get("Last-Modified")
-            cache[url] = {"etag": etag, "last_modified": last_modified, "body": html}
         else:
-            result.failures.append({"url": url, "http_status": resp.status_code})
-            continue
+            resp = payload  # type: ignore[assignment]
+            if resp.status_code == 200:
+                html = resp.text
+                status = 200
+                etag = resp.headers.get("ETag")
+                last_modified = resp.headers.get("Last-Modified")
+                cache[url] = {"etag": etag, "last_modified": last_modified, "body": html}
+            else:
+                result.failures.append({"url": url, "http_status": resp.status_code})
+                continue
 
         title, blocks = extract(html, url)
         extracted_text = "\n".join(b["text"] for b in blocks)
@@ -376,12 +436,12 @@ def write_manifest(result: ScrapeResult, robots_text: str) -> dict:
         },
         "pages": pages,
         "failures": sorted(result.failures, key=lambda f: f["url"]),
-        "excluded_by_robots": sorted(result.excluded, key=lambda e: e["url"]),
+        "excluded": sorted(result.excluded, key=lambda e: e["url"]),
         "summary": {
             "page_count": len(pages),
             "total_words": sum(p["word_count"] for p in pages),
             "failure_count": len(result.failures),
-            "excluded_by_robots_count": len(result.excluded),
+            "excluded_count": len(result.excluded),
         },
     }
     MANIFEST_PATH.write_text(
@@ -464,7 +524,7 @@ def run(limit: int | None = None) -> dict:
         f"\nScrape complete: {summary['page_count']} pages, "
         f"{summary['total_words']} words, "
         f"{summary['failure_count']} failures, "
-        f"{summary['excluded_by_robots_count']} excluded by robots.",
+        f"{summary['excluded_count']} excluded (robots or off-host redirect).",
         file=sys.stderr,
     )
     return manifest

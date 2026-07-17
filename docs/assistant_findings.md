@@ -22,9 +22,10 @@ Sturge-Weber Foundation, and it does not use any Foundation-provided data.
   unchanged pages, and retries on transient 5xx. The site returned blanket HTTP 500s for
   part of this session (a server-side outage, not a block); the scrape ran once it
   recovered.
-- Result: 108 pages, 46,879 words. One sitemap link 404s (`/events/past-events/`) and is
-  recorded as a failure. Words per page range 6 to 3,604 (median 295).
-- Chunking: 490 chunks, 1 to 367 words each (median 53), none over the 500-word bound. On
+- Result: 107 pages, 45,529 words. One sitemap link 404s (`/events/past-events/`) and is
+  recorded as a failure; one page redirects off-host and is excluded (see below). Words
+  per page range 6 to 3,604 (median 295).
+- Chunking: 478 chunks, 1 to 367 words each (median 54), none over the 500-word bound. On
   this site most pages have short sections, so most chunks are a single section under the
   200-word target rather than packed to it; the size test covers the packing and splitting
   paths on synthetic pages where they actually occur.
@@ -33,12 +34,20 @@ Sturge-Weber Foundation, and it does not use any Foundation-provided data.
 
 - Five pages hold fewer than 40 words (video/image galleries and a near-empty scholarship
   stub). They stay in the corpus but carry almost no retrievable text.
-- One page, `/events/mylas-mission-5k-and-jeeputv-ride.html`, currently serves injected
-  casino-spam content (title begins "Mostbet Azərbaycan 2026: Kazino..."). This is what
-  the live site returns; the page appears compromised. It is left in the corpus as scraped
-  and flagged here. Its vocabulary does not overlap family questions, so it does not
-  surface in the eval, but it is a real data-quality signal worth reporting to the
-  Foundation.
+- One page, `/events/mylas-mission-5k-and-jeeputv-ride.html`, HTTP 301-redirects off the
+  Foundation's domain to `www.mylasmissionsws.com`, which in turn redirects to
+  `mycvmd.com`. That final page is gambling spam in Azerbaijani (title "Mostbet Azərbaycan
+  2026: Kazino, Bonuslar və Mərc Platforması"), not a Sturge-Weber event. The event's own
+  domain appears to have lapsed or been taken over. This is not a compromise of
+  sturge-weber.org's server; it is a dangling link on their site that now sends visitors
+  to a spam site. It was reported to the Foundation.
+- Scraper scope: the plan scopes the corpus to the Foundation's own domain. The scraper
+  follows only same-host redirects; a redirect that leaves sturge-weber.org (this event
+  page) is recorded in the manifest's `excluded` list and not fetched. An earlier version
+  followed the cross-host 301 and stored the external spam text under the sturge-weber URL
+  (1,350 words); fixing the scraper dropped that page, which is why the corpus is 107
+  pages rather than 108. The page never surfaced in the eval either way (its vocabulary
+  does not overlap family questions).
 
 ## Retrieval
 
@@ -48,7 +57,7 @@ three with its own chunks).
 
 | Category | n | hit@3 | MRR |
 |---|---|---|---|
-| 1 — in-scope factual | 15 | 0.80 | 0.68 |
+| 1 — in-scope factual | 15 | 0.80 | 0.65 |
 | 2 — navigation | 11 | 0.91 | 0.81 |
 
 These are moderate, not strong, and the plan anticipated that: BM25 stays, and the gaps
