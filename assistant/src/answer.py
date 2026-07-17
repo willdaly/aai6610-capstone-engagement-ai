@@ -56,9 +56,6 @@ TOP_K = 3
 # a sentence boundary, so the reply stays short and readable in a terminal.
 QUOTE_WORD_BUDGET = 90
 
-_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-_PHONE_RE = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")
-
 
 @dataclass(frozen=True)
 class Citation:
@@ -185,7 +182,14 @@ class Assistant:
         self.coverage_threshold = coverage_threshold
         self.score_threshold = score_threshold
         self.contact = self._find_page(("contact",))
-        self.clinical = self._find_page(("clinical", "care-network", "care_network")) or self.contact
+        # Prefer the clinical *care* network page over other pages that merely contain
+        # "clinical" (e.g. clinical-research-participation), so a medical refusal points a
+        # family to care resources rather than a research sign-up.
+        self.clinical = (
+            self._find_page(("clinical-care", "care-network", "care_network"))
+            or self._find_page(("clinical",))
+            or self.contact
+        )
 
     def _find_page(self, url_substrings: tuple[str, ...]) -> Citation | None:
         for chunk in self.index.chunks:
@@ -331,17 +335,17 @@ class Assistant:
         )
         answer_text = "".join(block.text for block in resp.content if block.type == "text")
 
-        cited_urls = set(_EMAIL_RE.sub("", answer_text) and re.findall(r"https?://[^\s()]+", answer_text))
-        cited_urls = {u.rstrip(".,);") for u in cited_urls}
+        # Citation post-check: pull every URL the model wrote and require that all of them
+        # are among the retrieved passages, and that it cited at least one. An answer that
+        # cites nothing, or cites a URL it was not given, is not trustworthy as grounded,
+        # so it is demoted to the escalation response.
+        cited_urls = {u.rstrip(".,);:") for u in re.findall(r"https?://[^\s()]+", answer_text)}
         ungrounded = [u for u in cited_urls if u not in retrieved_urls]
-        if ungrounded:
-            # The model cited something it was not given. Do not trust the answer.
+        if not cited_urls or ungrounded:
             return self.escalation(top_score=results[0][1], coverage=coverage,
                                    retrieved_urls=[c.url for c, _ in results])
 
         citations = [Citation(title=c.title, url=c.url) for c, _ in results if c.url in cited_urls]
-        if not citations:
-            citations = [Citation(title=c.title, url=c.url) for c, _ in results[:2]]
         return AnswerResult(
             kind="answer",
             text=answer_text.strip(),
