@@ -223,6 +223,12 @@ __marimo__/
 # KDD Cup 1998 learning set is ~117 MB uncompressed.
 data/
 
+# Scraped corpus. Created by assistant/src/scrape.py, never committed. The pages are
+# the Foundation's copyrighted content and this repo is public. Only the scraper and
+# assistant/corpus_manifest.json (URLs, titles, hashes) are committed, so the corpus
+# is reproducible and verifiable without redistributing the text. See docs/assistant_plan.md.
+assistant/corpus/
+
 # macOS
 .DS_Store
 
