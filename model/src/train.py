@@ -69,6 +69,17 @@ AUPRC_FLOOR = 0.0508
 CV = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
 CV_SCORING = "average_precision"
 
+# Every figure this script writes. eda.py has its own list and writes into the same
+# directory, so both lists together are the declared contents of docs/figures/ and a
+# PNG in neither is a stray. Kept as a module constant for the same reason the EDA
+# keeps one: the tests assert the directory against it without restating it.
+EXPECTED_FIGURES = (
+    "cv_auprc_by_model.png",
+    "net_revenue_curve.png",
+    "calibration_best_model.png",
+    "fairness_slices.png",
+)
+
 
 @dataclass
 class ModelSpec:

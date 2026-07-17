@@ -30,6 +30,7 @@ from eda import (
     wilson_interval,
 )
 from load_data import make_split
+from train import EXPECTED_FIGURES as MODELING_FIGURES
 
 EXPECTED_COLUMN_COUNT = 481
 
@@ -161,12 +162,24 @@ class TestFigures:
         assert path.exists(), f"{name} missing. Run: python model/src/eda.py"
         assert path.stat().st_size > 0, f"{name} is empty"
 
-    def test_no_unexpected_figures(self):
-        """The plan fixes the figure set, so a stray PNG means the two have drifted."""
+    def test_no_undeclared_figures(self):
+        """A PNG no script declares means the plans and the figures have drifted.
+
+        eda.py and train.py both write into docs/figures/, so the declared contents of
+        that directory are the union of their two figure lists and the check has to
+        know about both. Asserting against the EDA's list alone would fail the moment
+        the modeling phase writes its first figure, which is drift in the test rather
+        than in the figures.
+
+        Subset rather than equality: this test guards against strays, and the
+        per-figure existence check above is what guards against a missing EDA figure.
+        train.py's own figures are checked in test_train.py.
+        """
         if not FIGURES_DIR.exists():
             pytest.skip(f"{FIGURES_DIR} not found. Run: python model/src/eda.py")
         found = {p.name for p in FIGURES_DIR.glob("*.png")}
-        assert found == set(EXPECTED_FIGURES)
+        declared = set(EXPECTED_FIGURES) | set(MODELING_FIGURES)
+        assert found <= declared, f"undeclared figures: {sorted(found - declared)}"
 
 
 class TestPeekingRule:
