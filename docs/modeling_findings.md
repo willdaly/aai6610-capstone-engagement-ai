@@ -105,22 +105,23 @@ Three, all small, all recorded here rather than left to be discovered in the dif
   weighting rather than resampling, with the weights computed inside each CV fold from
   that fold's own class rate instead of once from the whole training portion.
 
-No grid was shrunk. The full script runs in **3m16s** on a laptop CPU, inside the plan's
-"minutes, not hours" budget.
+No grid was shrunk. The full script runs end to end in **3m37s** on a laptop CPU from a
+clean state, inside the plan's "minutes, not hours" budget.
 
 ---
 
 ## 2. Model comparison
 
 **Frame: training portion (n=76,329), stratified 5-fold CV, scored on average
-precision.** Figure: `cv_auprc_by_model.png`.
+precision.** Figure: `cv_auprc_by_model.png`. Seconds are wall-clock from the recorded
+run and vary between runs; the AUPRC figures do not, and reproduce exactly on a rerun.
 
 | Model | CV AUPRC | SD | vs floor | Best params | Fits | Secs |
 | --- | ---: | ---: | ---: | --- | ---: | ---: |
-| `dummy` | 0.0508 | 0.0000 | 1.00x | (none) | 5 | 5.4 |
-| `logistic` | 0.0800 | 0.0058 | 1.57x | C=0.001 | 25 | 18.6 |
-| `random_forest` | 0.0813 | 0.0056 | 1.60x | depth=8, n=500 | 30 | 108.2 |
-| `hist_gradient_boosting` | **0.0838** | 0.0040 | **1.65x** | lr=0.1, depth=3 | 30 | 24.4 |
+| `dummy` | 0.0508 | 0.0000 | 1.00x | (none) | 5 | 4.9 |
+| `logistic` | 0.0800 | 0.0058 | 1.57x | C=0.001 | 25 | 19.2 |
+| `random_forest` | 0.0813 | 0.0056 | 1.60x | depth=8, n=500 | 30 | 115.2 |
+| `hist_gradient_boosting` | **0.0838** | 0.0040 | **1.65x** | lr=0.1, depth=3 | 30 | 33.4 |
 
 Every model clears the floor, so the phase has not failed, and the boosting model is
 strongest, as the plan expected.
@@ -352,8 +353,8 @@ hyperparameters, and the experiment exists to answer exactly one question.
 
 | Feature set | CV AUPRC | SD | vs floor | Secs |
 | --- | ---: | ---: | ---: | ---: |
-| Baseline (no census) | **0.0838** | 0.0040 | 1.65x | 24.4 |
-| Baseline + census (290 columns) | 0.0824 | 0.0039 | 1.62x | 14.4 |
+| Baseline (no census) | **0.0838** | 0.0040 | 1.65x | 33.4 |
+| Baseline + census (290 columns) | 0.0824 | 0.0039 | 1.62x | 17.8 |
 | **Delta** | **-0.0014** | | **-1.6%** | |
 
 **Adding the census block makes the model slightly worse, and the delta is smaller than
