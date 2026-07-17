@@ -43,6 +43,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from sklearn.dummy import DummyClassifier  # noqa: E402
+from sklearn.ensemble import (  # noqa: E402
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.linear_model import LogisticRegression  # noqa: E402
 from sklearn.model_selection import GridSearchCV, StratifiedKFold  # noqa: E402
 
@@ -52,6 +56,10 @@ from load_data import RANDOM_STATE, REPO_ROOT, load_raw, make_split  # noqa: E40
 
 MODELING_DIR = REPO_ROOT / "docs" / "modeling"
 RESULTS_PATH = MODELING_DIR / "results.csv"
+# Every grid point, not just the winner. results.csv answers "which model won"; this
+# answers "by how much, and did the grid stop too early", which is the question a
+# best-params-only table cannot. It costs nothing: the search already computed it.
+GRID_PATH = MODELING_DIR / "cv_grid.csv"
 ARTIFACTS_DIR = REPO_ROOT / "model" / "artifacts"
 
 # The campaign's documented mail cost per contact (plan, objective section). Net
@@ -90,8 +98,6 @@ class ModelSpec:
         estimator: An unfitted sklearn classifier.
         grid: Parameter grid, keyed by the pipeline's step-prefixed names.
         scale_numeric: Standardize numerics. True for the logistic model only.
-        needs_sample_weight: Pass class-balancing weights at fit time, for estimators
-            with no class_weight parameter.
         note: Anything the findings doc has to say about this row, e.g. a grid that
             was shrunk to stay inside the runtime budget.
     """
@@ -100,7 +106,6 @@ class ModelSpec:
     estimator: object
     grid: dict = field(default_factory=dict)
     scale_numeric: bool = False
-    needs_sample_weight: bool = False
     note: str = ""
 
 
@@ -129,23 +134,60 @@ def model_specs() -> list[ModelSpec]:
             # (every linear correlation with TARGET_B is under 0.06, findings task 5),
             # so this model is the calibrated, interpretable floor rather than a
             # contender, and a wide grid would buy nothing.
-            grid={"model__C": [0.01, 0.1, 1.0, 10.0]},
+            #
+            # 0.001 is here because the first run picked 0.01, the edge of the grid,
+            # and an optimum at a boundary is a grid that stopped too early rather than
+            # an answer. Heavy regularization is also what the EDA predicts: the giving
+            # summaries correlate up to r=0.91 (findings task 5), and correlated
+            # predictors are what a penalty exists to control.
+            grid={"model__C": [0.001, 0.01, 0.1, 1.0, 10.0]},
             scale_numeric=True,
         ),
+        ModelSpec(
+            name="random_forest",
+            estimator=RandomForestClassifier(
+                class_weight="balanced_subsample",
+                random_state=RANDOM_STATE,
+                # Single-threaded on purpose: GridSearchCV parallelizes across folds
+                # with n_jobs=-1, and a forest that also grabs every core would
+                # oversubscribe the machine and run slower than either alone.
+                n_jobs=1,
+            ),
+            # Depth and estimators, as the plan specifies. Unlimited depth is in the
+            # grid as the honest default rather than because it is expected to win: on
+            # a 5%-positive target a fully grown forest memorizes the majority class
+            # cheaply, and the CV score is what says whether it did.
+            grid={
+                "model__n_estimators": [200, 500],
+                "model__max_depth": [8, 16, None],
+            },
+        ),
+        ModelSpec(
+            name="hist_gradient_boosting",
+            # The plan calls for class weighting here "via sample_weight", which is the
+            # mechanism this estimator needed when it had no class_weight parameter.
+            # This scikit-learn has one, and it does the same thing (it converts the
+            # setting to balanced sample weights internally) with two advantages: the
+            # weights are computed inside each CV fold from that fold's own class rate
+            # rather than once from the whole training portion, and there is no fit
+            # param to thread through GridSearchCV and get subtly wrong. Same decision
+            # the plan made, cost-sensitive weighting rather than resampling, expressed
+            # in the estimator's own vocabulary.
+            #
+            # Native NaN handling is worth noting: the median imputation upstream is
+            # not doing this model any favours. It is there to keep every model on one
+            # feature matrix, so the comparison is about the models rather than about
+            # their preprocessing.
+            estimator=HistGradientBoostingClassifier(
+                class_weight="balanced",
+                random_state=RANDOM_STATE,
+            ),
+            grid={
+                "model__learning_rate": [0.05, 0.1],
+                "model__max_depth": [3, 6, None],
+            },
+        ),
     ]
-
-
-def fit_weights(y: pd.Series) -> np.ndarray:
-    """Class-balancing sample weights, the sklearn "balanced" formula.
-
-    For estimators that have no class_weight parameter. Weight for a class is
-    n_samples / (n_classes * n_class_samples), so at a 5.08% positive rate a responder
-    counts about 9.8x a non-responder.
-    """
-    counts = y.value_counts()
-    total = len(y)
-    weights = {label: total / (len(counts) * count) for label, count in counts.items()}
-    return y.map(weights).to_numpy()
 
 
 def run_cv(spec: ModelSpec, X: pd.DataFrame, y: pd.Series) -> dict:
@@ -165,10 +207,6 @@ def run_cv(spec: ModelSpec, X: pd.DataFrame, y: pd.Series) -> dict:
         columns=list(X.columns),
     )
 
-    fit_params = {}
-    if spec.needs_sample_weight:
-        fit_params["model__sample_weight"] = fit_weights(y)
-
     search = GridSearchCV(
         pipeline,
         param_grid=spec.grid,
@@ -179,7 +217,7 @@ def run_cv(spec: ModelSpec, X: pd.DataFrame, y: pd.Series) -> dict:
     )
 
     started = time.perf_counter()
-    search.fit(X, y, **fit_params)
+    search.fit(X, y)
     elapsed = time.perf_counter() - started
 
     best = search.cv_results_["params"].index(search.best_params_)
@@ -192,6 +230,15 @@ def run_cv(spec: ModelSpec, X: pd.DataFrame, y: pd.Series) -> dict:
         "grid_size": len(search.cv_results_["params"]),
         "note": spec.note,
         "estimator": search.best_estimator_,
+        "cv_results": pd.DataFrame(
+            {
+                "model": spec.name,
+                "params": [json.dumps(p, sort_keys=True) for p in search.cv_results_["params"]],
+                "cv_auprc_mean": search.cv_results_["mean_test_score"],
+                "cv_auprc_std": search.cv_results_["std_test_score"],
+                "rank": search.cv_results_["rank_test_score"],
+            }
+        ),
     }
 
 
@@ -214,15 +261,20 @@ def report_cv(rows: list[dict]) -> None:
 
 
 def write_results(rows: list[dict]) -> pd.DataFrame:
-    """Write docs/modeling/results.csv, one row per model.
+    """Write docs/modeling/results.csv (one row per model) and cv_grid.csv (every point).
 
     The fitted estimator is dropped: results.csv is a table of numbers for the
     findings doc, and the pipelines go to model/artifacts/ instead.
     """
     MODELING_DIR.mkdir(parents=True, exist_ok=True)
-    frame = pd.DataFrame([{k: v for k, v in row.items() if k != "estimator"} for row in rows])
+    dropped = {"estimator", "cv_results"}
+    frame = pd.DataFrame([{k: v for k, v in row.items() if k not in dropped} for row in rows])
     frame.to_csv(RESULTS_PATH, index=False)
-    print(f"Wrote {RESULTS_PATH.relative_to(REPO_ROOT)} ({len(frame)} rows)\n")
+    print(f"Wrote {RESULTS_PATH.relative_to(REPO_ROOT)} ({len(frame)} rows)")
+
+    grid = pd.concat([row["cv_results"] for row in rows], ignore_index=True)
+    grid.to_csv(GRID_PATH, index=False)
+    print(f"Wrote {GRID_PATH.relative_to(REPO_ROOT)} ({len(grid)} rows)\n")
     return frame
 
 
@@ -268,11 +320,14 @@ def figure_cv_comparison(rows: list[dict]) -> None:
         ax.text(index, mean + std + 0.002, f"{mean:.4f}", ha="center", fontsize=9)
 
     ax.axhline(AUPRC_FLOOR, color=REFERENCE, linestyle="--", linewidth=1.2)
+    # In the gap between the first two bars. Right-aligned at the axis edge collided
+    # with the last bar, and every bar except the dummy's clears the line, so the gap
+    # after the dummy is the one place on this axis that is reliably empty.
     ax.text(
-        len(names) - 0.4,
-        AUPRC_FLOOR + 0.0015,
+        0.5,
+        AUPRC_FLOOR + 0.002,
         f"random baseline {AUPRC_FLOOR:.4f}",
-        ha="right",
+        ha="center",
         fontsize=8,
         color=REFERENCE,
     )
