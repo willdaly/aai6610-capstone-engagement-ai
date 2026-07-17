@@ -1,3 +1,5 @@
+If you think your child may need care right now, please don't wait on this tool or the website. Call your child's doctor, or your local emergency number (911 in the US), right away.
+
 I can't answer questions about a specific person's diagnosis, symptoms, medications, or treatment. I am not able to give medical advice, and it would not be safe for me to try.
 
 For anything about your child's care, the people who can help are your own clinical team. They can examine your child, they know the history, and they can weigh the options with you. Please bring this question to them.

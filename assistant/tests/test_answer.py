@@ -84,6 +84,16 @@ class TestTemplates:
         urls = " ".join(c.url for c in r.citations)
         assert "contact" in urls
 
+    def test_refusal_opens_with_emergency_guidance(self, assistant):
+        # An urgent question ("...right now, should I go to the ER?") must lead with the
+        # urgency line pointing to emergency services, before the calm redirect.
+        r = assistant.answer("My child just had a seizure, should I go to the ER right now?")
+        assert r.kind == "refusal"
+        first_paragraph = r.text.split("\n\n", 1)[0].lower()
+        assert "911" in first_paragraph
+        assert "emergency" in first_paragraph
+        assert "right now" in first_paragraph
+
     def test_escalation_points_to_contact(self, assistant):
         r = assistant.answer("How do I file my taxes?")
         assert r.kind == "escalation"
